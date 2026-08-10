@@ -29,26 +29,30 @@ MEDICINE_CATEGORIES = {
 def parse_prescription_text(text):
     """
     Intelligently parses OCR text to extract structured medicine parameters, doctor notes, and confidence scores.
+    Never fabricates values not present in the document.
     """
     text_lower = (text or "").lower()
     
     parsed_data = {
-        "name": "Amoxicillin",
-        "dosage": "500mg",
-        "frequency": "1-0-1",
+        "name": "",
+        "dosage": "",
+        "frequency": "",
         "duration": "7",
         "before_food": False,
         "after_food": True,
-        "morning": True,
+        "morning": False,
         "afternoon": False,
         "evening": False,
-        "night": True,
-        "category": "Antibiotic",
-        "total_tablets": 14,
-        "doctor_instructions": "Take after meals with warm water.",
-        "doctor_notes": "Follow up in 7 days.",
-        "confidence_score": 92.0
+        "night": False,
+        "category": "General",
+        "total_tablets": 0,
+        "doctor_instructions": "",
+        "doctor_notes": "",
+        "confidence_score": 0.0
     }
+
+    if not text or len(text.strip()) < 5:
+        return parsed_data
 
     # 1. Fuzzy match for Medicine Name
     tokens = text.split() if text else []
@@ -56,12 +60,13 @@ def parse_prescription_text(text):
     highest_score = 0
     
     for word in tokens:
-        if len(word) < 4:
+        clean_w = re.sub(r'[^a-zA-Z]', '', word)
+        if len(clean_w) < 4:
             continue
-        match_result = process.extractOne(word, COMMON_MEDICINES, scorer=fuzz.ratio)
+        match_result = process.extractOne(clean_w, COMMON_MEDICINES, scorer=fuzz.ratio)
         if match_result:
             matched_name, score, _ = match_result
-            if score > highest_score and score > 65:
+            if score > highest_score and score >= 65:
                 highest_score = score
                 best_match = matched_name
                 
@@ -69,6 +74,15 @@ def parse_prescription_text(text):
         parsed_data["name"] = best_match
         parsed_data["category"] = MEDICINE_CATEGORIES.get(best_match, "General")
         parsed_data["confidence_score"] = float(highest_score)
+    else:
+        # Try finding words before mg/ml/tablets
+        name_match = re.search(r'\b([A-Za-z]{4,20})\s+(?:\d+\s*(?:mg|ml|mcg|g))\b', text)
+        if name_match:
+            parsed_data["name"] = name_match.group(1).capitalize()
+            parsed_data["confidence_score"] = 70.0
+        else:
+            parsed_data["name"] = "Unspecified Medicine"
+            parsed_data["confidence_score"] = 50.0
 
     # 2. Extract Dosage
     dosage_pattern = r'\b(\d+\s*(?:mg|ml|g|mcg|tablets?))\b'
@@ -77,7 +91,7 @@ def parse_prescription_text(text):
         parsed_data["dosage"] = dosage_matches[0]
 
     # 3. Extract Frequency
-    freq_pattern = r'\b(1-0-1|1-1-1|1-0-0|0-1-0|0-0-1|once daily|twice daily|thrice daily|bid|tid|od)\b'
+    freq_pattern = r'\b(1-0-1|1-1-1|1-0-0|0-1-0|0-0-1|1-1-1-1|once daily|twice daily|thrice daily|bid|tid|od|qid)\b'
     freq_matches = re.findall(freq_pattern, text_lower)
     if freq_matches:
         f_val = freq_matches[0].upper() if '-' in freq_matches[0] else freq_matches[0]
@@ -99,42 +113,68 @@ def parse_prescription_text(text):
     if any(k in text_lower for k in ['before food', 'empty stomach', 'before meal', 'ac']):
         parsed_data["before_food"] = True
         parsed_data["after_food"] = False
-    else:
+    elif any(k in text_lower for k in ['after food', 'after meal', 'pc', 'with food']):
         parsed_data["before_food"] = False
         parsed_data["after_food"] = True
 
-    # 6. Slot Timing Flags
+    # 6. Slot Timing Flags (Exact Reminder Generation)
     freq_str = parsed_data["frequency"].lower()
-    if '1-1-1' in freq_str or 'thrice' in freq_str or 'tid' in freq_str:
-        parsed_data["morning"] = True
-        parsed_data["afternoon"] = True
-        parsed_data["evening"] = False
-        parsed_data["night"] = True
-    elif '1-0-1' in freq_str or 'twice' in freq_str or 'bid' in freq_str:
-        parsed_data["morning"] = True
-        parsed_data["afternoon"] = False
-        parsed_data["evening"] = False
-        parsed_data["night"] = True
-    elif '0-1-0' in freq_str:
-        parsed_data["morning"] = False
-        parsed_data["afternoon"] = True
-        parsed_data["evening"] = False
-        parsed_data["night"] = False
-    elif '0-0-1' in freq_str or 'night' in text_lower:
-        parsed_data["morning"] = False
-        parsed_data["afternoon"] = False
-        parsed_data["evening"] = False
-        parsed_data["night"] = True
-    elif '1-0-0' in freq_str or 'morning' in text_lower:
+    
+    if freq_str == '1-0-0':
         parsed_data["morning"] = True
         parsed_data["afternoon"] = False
         parsed_data["evening"] = False
         parsed_data["night"] = False
+    elif freq_str == '0-1-0':
+        parsed_data["morning"] = False
+        parsed_data["afternoon"] = True
+        parsed_data["evening"] = False
+        parsed_data["night"] = False
+    elif freq_str == '0-0-1':
+        parsed_data["morning"] = False
+        parsed_data["afternoon"] = False
+        parsed_data["evening"] = False
+        parsed_data["night"] = True
+    elif freq_str == '1-0-1' or 'twice daily' in freq_str or 'bid' in freq_str:
+        parsed_data["morning"] = True
+        parsed_data["afternoon"] = False
+        parsed_data["evening"] = False
+        parsed_data["night"] = True
+    elif freq_str == '1-1-1' or 'thrice daily' in freq_str or 'tid' in freq_str:
+        parsed_data["morning"] = True
+        parsed_data["afternoon"] = True
+        parsed_data["evening"] = False
+        parsed_data["night"] = True
+    elif freq_str == '1-1-1-1' or 'qid' in freq_str:
+        parsed_data["morning"] = True
+        parsed_data["afternoon"] = True
+        parsed_data["evening"] = True
+        parsed_data["night"] = True
+    elif 'once daily' in freq_str or 'od' in freq_str:
+        parsed_data["morning"] = True
+        parsed_data["afternoon"] = False
+        parsed_data["evening"] = False
+        parsed_data["night"] = False
+    else:
+        # Fallback slot flags if frequency wasn't matched explicitly
+        if 'morning' in text_lower:
+            parsed_data["morning"] = True
+        if 'afternoon' in text_lower:
+            parsed_data["afternoon"] = True
+        if 'evening' in text_lower:
+            parsed_data["evening"] = True
+        if 'night' in text_lower:
+            parsed_data["night"] = True
+
+        if not any([parsed_data["morning"], parsed_data["afternoon"], parsed_data["evening"], parsed_data["night"]]):
+            # Default to morning only if unspecified
+            parsed_data["morning"] = True
 
     # 7. Doctor Instructions & Notes
-    if 'doctor note' in text_lower or 'note:' in text_lower:
-        idx = text_lower.find('note')
-        parsed_data["doctor_notes"] = text[idx:idx+120]
+    if 'doctor note' in text_lower or 'note:' in text_lower or 'instruction' in text_lower:
+        idx = max(text_lower.find('note'), text_lower.find('instruction'))
+        if idx != -1:
+            parsed_data["doctor_notes"] = text[idx:idx+150].strip()
 
     # 8. Calculate Estimated Total Tablets / Quantity
     daily_doses = (1 if parsed_data["morning"] else 0) + \
@@ -144,7 +184,11 @@ def parse_prescription_text(text):
     if daily_doses == 0:
         daily_doses = 1
     
-    dur_days = int(parsed_data["duration"])
+    try:
+        dur_days = int(parsed_data["duration"])
+    except ValueError:
+        dur_days = 7
+
     parsed_data["total_tablets"] = daily_doses * dur_days
 
     return parsed_data

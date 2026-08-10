@@ -76,30 +76,50 @@ export function readMedicine(med, lang = 'en', speed = 1.0) {
 
 /**
  * Build a time-of-day voice reminder message and speak it.
+ * Greeting is based on the SCHEDULED time, not the current clock.
  * @param {object} schedule - Schedule item with medication info
  * @param {string} lang - Language code
  * @param {number} speed - Speech rate
  */
 export function speakReminder(schedule, lang = 'en', speed = 1.0) {
-  const hour = new Date().getHours();
-  let timeOfDay = 'Morning';
-  if (hour >= 12 && hour < 17) timeOfDay = 'Afternoon';
-  else if (hour >= 17 && hour < 21) timeOfDay = 'Evening';
-  else if (hour >= 21) timeOfDay = 'Night';
+  // Derive greeting from the scheduled_time field (HH:MM:SS or HH:MM string)
+  let hour = new Date().getHours(); // fallback
+  if (schedule.scheduled_time) {
+    const parts = String(schedule.scheduled_time).split(':');
+    if (parts.length >= 2) hour = parseInt(parts[0], 10);
+  }
+
+  let greeting = 'Morning';
+  if (hour >= 12 && hour < 17) greeting = 'Afternoon';
+  else if (hour >= 17) greeting = 'Evening';
 
   const name = schedule.medication_name || 'medicine';
   const dosage = schedule.dosage || '1 tablet';
   const food = schedule.timing_instruction === 'before_food'
-    ? (lang === 'en' ? 'before food' : 'खाने से पहले')
-    : (lang === 'en' ? 'after food' : 'खाने के बाद');
+    ? (lang === 'en' ? 'before breakfast' : 'खाने से पहले')
+    : (lang === 'en' ? 'after breakfast' : 'खाने के बाद');
+
+  // Format display time (e.g. "8:30 AM")
+  let displayTime = '';
+  if (schedule.scheduled_time) {
+    const parts = String(schedule.scheduled_time).split(':');
+    if (parts.length >= 2) {
+      let h = parseInt(parts[0], 10);
+      const m = parts[1].padStart(2, '0');
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      if (h > 12) h -= 12;
+      if (h === 0) h = 12;
+      displayTime = `${h}:${m} ${ampm}`;
+    }
+  }
 
   const textByLang = {
-    en: `Good ${timeOfDay}. It is time to take your ${name}. Please take ${dosage} ${food}.`,
-    hi: `${timeOfDay} नमस्ते। अब आपकी ${name} लेने का समय है। कृपया ${food} के साथ ${dosage} लें।`,
-    kn: `${timeOfDay} ನಮಸ್ಕಾರ. ಈಗ ನಿಮ್ಮ ${name} ತೆಗೆದುಕೊಳ್ಳುವ ಸಮಯ. ${food} ${dosage} ತೆಗೆದುಕೊಳ್ಳಿ.`,
-    ta: `${timeOfDay} வணக்கம். இப்போது உங்கள் ${name} எடுக்கும் நேரம். ${food} ${dosage} எடுக்கவும்.`,
-    te: `${timeOfDay} నమస్కారం. ఇప్పుడు మీ ${name} తీసుకునే సమయం. ${food} ${dosage} తీసుకోండి.`,
-    ml: `${timeOfDay} നമസ്കാരം. ഇപ്പോൾ നിങ്ങളുടെ ${name} കഴിക്കേണ്ട സമയമാണ്. ${food} ${dosage} കഴിക്കുക.`,
+    en: `Good ${greeting}. ${displayTime ? `It is now ${displayTime}. ` : ''}This is your medicine reminder. Please take ${name} ${dosage} ${food}. Once you've taken it, tap Take Now. If you want to postpone it, tap Snooze.`,
+    hi: `${greeting === 'Morning' ? 'सुप्रभात' : greeting === 'Afternoon' ? 'नमस्कार' : 'शुभ संध्या'}। ${displayTime ? `अभी ${displayTime} बज रहे हैं। ` : ''}यह आपकी दवाई की याद है। कृपया ${name} ${dosage} ${food} लें। लेने के बाद Take Now दबाएं। बाद में लेना हो तो Snooze दबाएं।`,
+    kn: `${greeting === 'Morning' ? 'ಶುಭೋದಯ' : greeting === 'Afternoon' ? 'ನಮಸ್ಕಾರ' : 'ಶುಭ ಸಂಜೆ'}. ಈಗ ನಿಮ್ಮ ${name} ತೆಗೆದುಕೊಳ್ಳುವ ಸಮಯ. ${food} ${dosage} ತೆಗೆದುಕೊಳ್ಳಿ.`,
+    ta: `${greeting === 'Morning' ? 'காலை வணக்கம்' : greeting === 'Afternoon' ? 'மதிய வணக்கம்' : 'மாலை வணக்கம்'}. இப்போது உங்கள் ${name} எடுக்கும் நேரம். ${food} ${dosage} எடுக்கவும்.`,
+    te: `${greeting === 'Morning' ? 'శుభోదయం' : greeting === 'Afternoon' ? 'నమస్కారం' : 'శుభ సాయంత్రం'}. ఇప్పుడు మీ ${name} తీసుకునే సమయం. ${food} ${dosage} తీసుకోండి.`,
+    ml: `${greeting === 'Morning' ? 'സുപ്രഭാതം' : greeting === 'Afternoon' ? 'നമസ്കാരം' : 'ശുഭ സന്ധ്യ'}. ഇപ്പോൾ നിങ്ങളുടെ ${name} കഴിക്കേണ്ട സമയമാണ്. ${food} ${dosage} കഴിക്കുക.`,
   };
 
   const text = textByLang[lang] || textByLang['en'];

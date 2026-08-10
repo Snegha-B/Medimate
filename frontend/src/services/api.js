@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://127.0.0.1:8000';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
 export function getAuthToken() {
   return localStorage.getItem('token') || '';
@@ -46,8 +46,14 @@ export async function apiFetch(endpoint, options = {}) {
 
   const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
 
-  const response = await fetch(url, config);
-  
+  let response;
+  try {
+    response = await fetch(url, config);
+  } catch (netErr) {
+    console.error('Network Error during apiFetch:', netErr);
+    throw new Error(`Unable to connect to backend server at ${API_BASE_URL}. Please ensure the server is running.`);
+  }
+
   if (response.status === 401 && !endpoint.includes('/login') && !endpoint.includes('/register')) {
     clearAuthSession();
     window.location.href = '/login';
@@ -57,13 +63,35 @@ export async function apiFetch(endpoint, options = {}) {
   const contentType = response.headers.get('content-type');
   let data;
   if (contentType && contentType.includes('application/json')) {
-    data = await response.json();
+    try {
+      data = await response.json();
+    } catch (e) {
+      data = await response.text();
+    }
   } else {
     data = await response.text();
   }
 
   if (!response.ok) {
-    const errorMessage = typeof data === 'object' ? (data.error || data.detail || 'API Request failed') : data;
+    let errorMessage = 'API Request failed';
+    if (typeof data === 'object' && data !== null) {
+      if (data.error) {
+        errorMessage = data.error;
+      } else if (data.detail) {
+        errorMessage = data.detail;
+      } else {
+        const messages = [];
+        for (const [key, val] of Object.entries(data)) {
+          const valStr = Array.isArray(val) ? val.join(', ') : String(val);
+          messages.push(`${key}: ${valStr}`);
+        }
+        if (messages.length > 0) {
+          errorMessage = messages.join(' | ');
+        }
+      }
+    } else if (typeof data === 'string' && data.trim()) {
+      errorMessage = data;
+    }
     throw new Error(errorMessage);
   }
 
@@ -71,10 +99,14 @@ export async function apiFetch(endpoint, options = {}) {
 }
 
 export const api = {
+  baseURL: API_BASE_URL,
+  defaults: { baseURL: API_BASE_URL },
   get: (endpoint) => apiFetch(endpoint, { method: 'GET' }),
   post: (endpoint, body) => apiFetch(endpoint, { method: 'POST', body: body instanceof FormData ? body : JSON.stringify(body) }),
   put: (endpoint, body) => apiFetch(endpoint, { method: 'PUT', body: body instanceof FormData ? body : JSON.stringify(body) }),
+  patch: (endpoint, body) => apiFetch(endpoint, { method: 'PATCH', body: body instanceof FormData ? body : JSON.stringify(body) }),
   delete: (endpoint) => apiFetch(endpoint, { method: 'DELETE' }),
 };
 
 export default api;
+

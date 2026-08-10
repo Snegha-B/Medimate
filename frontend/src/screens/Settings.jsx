@@ -63,7 +63,7 @@ export default function Settings() {
       showToast('Caregiver added successfully!', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Error adding caregiver.', 'error');
+      showToast(err.message || 'Error adding caregiver.', 'error');
     }
   };
 
@@ -74,7 +74,7 @@ export default function Settings() {
       showToast('Caregiver removed.', 'info');
     } catch (err) {
       console.error(err);
-      showToast('Error removing caregiver.', 'error');
+      showToast(err.message || 'Error removing caregiver.', 'error');
     }
   };
 
@@ -87,12 +87,17 @@ export default function Settings() {
       setRemindersEnabled(false);
       showToast('Reminders disabled for this session', 'info');
     } else {
-      const perm = await Notification.requestPermission();
-      if (perm === 'granted') {
-        setRemindersEnabled(true);
-        showToast('Reminders enabled successfully!', 'success');
-      } else {
-        showToast('Permission denied in browser settings', 'error');
+      try {
+        const perm = await Notification.requestPermission();
+        if (perm === 'granted') {
+          setRemindersEnabled(true);
+          showToast('Reminders enabled successfully!', 'success');
+        } else {
+          showToast('Permission denied in browser settings', 'error');
+        }
+      } catch (err) {
+        console.error(err);
+        showToast(err.message || 'Error enabling notifications', 'error');
       }
     }
   };
@@ -106,7 +111,7 @@ export default function Settings() {
       showToast('Share link generated!', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Error generating share link.', 'error');
+      showToast(err.message || 'Error generating share link.', 'error');
     } finally {
       setShareLoading(false);
     }
@@ -129,7 +134,7 @@ export default function Settings() {
       showToast('Share link revoked. Caregivers can no longer view data.', 'info');
     } catch (err) {
       console.error(err);
-      showToast('Error revoking share link.', 'error');
+      showToast(err.message || 'Error revoking share link.', 'error');
     }
   };
 
@@ -159,7 +164,7 @@ export default function Settings() {
         setTimeout(() => window.location.reload(), 1500);
       } catch (err) {
         console.error(err);
-        showToast('Error restoring backup. Ensure JSON file is correct.', 'error');
+        showToast(err.message || 'Error restoring backup. Ensure JSON file is correct.', 'error');
       }
     }
   };

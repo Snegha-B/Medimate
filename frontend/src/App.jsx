@@ -1,6 +1,5 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AccessibilityProvider } from './context/AccessibilityContext';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
@@ -20,7 +19,6 @@ export default function App() {
   const isAuthenticated = Boolean(getAuthToken() || localStorage.getItem('userId'));
 
   return (
-    <AccessibilityProvider>
     <BrowserRouter>
       <PwaPrompt />
       <ToastContainer />
@@ -60,6 +58,5 @@ export default function App() {
         />
       </Routes>
     </BrowserRouter>
-    </AccessibilityProvider>
   );
 }

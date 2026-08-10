@@ -91,6 +91,11 @@ export default function AddPrescription() {
       setPreviewUrl(null);
     }
 
+    console.log('✔ Step 1: File selected');
+    console.log(`  File Name: ${selectedFile.name}`);
+    console.log(`  File Size: ${(selectedFile.size / 1024).toFixed(2)} KB`);
+    console.log(`  File Type: ${selectedFile.type || ext}`);
+
     // 3. Automatic Upload Pipeline with Explicit Stages
     setLoading(true);
     setUploadProgress(15);
@@ -492,39 +497,69 @@ export default function AddPrescription() {
               </div>
             </div>
 
-            {/* Schedule Slot Timing Checkboxes */}
+            {/* Schedule Slot Timing Checkboxes + Time Pickers */}
             <div style={{ margin: '20px 0' }}>
               <label className="input-label" style={{ marginBottom: '8px' }}>Automated Reminder Slots</label>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', background: 'var(--bg-subtle)', cursor: 'pointer', fontSize: '14px' }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(extractedData.morning)}
-                    onChange={e => setExtractedData({ ...extractedData, morning: e.target.checked })}
-                  />
-                  <Sunrise size={18} color="#f97316" />
-                  <span>Morning</span>
-                </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', background: 'var(--bg-subtle)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '14px', flex: '1' }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(extractedData.morning)}
+                      onChange={e => setExtractedData({ ...extractedData, morning: e.target.checked })}
+                    />
+                    <Sunrise size={18} color="#f97316" />
+                    <span>Morning</span>
+                  </label>
+                  {extractedData.morning && (
+                    <input
+                      type="time"
+                      value={extractedData.morning_time || '08:30'}
+                      onChange={e => setExtractedData({ ...extractedData, morning_time: e.target.value })}
+                      style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                    />
+                  )}
+                </div>
 
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', background: 'var(--bg-subtle)', cursor: 'pointer', fontSize: '14px' }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(extractedData.afternoon)}
-                    onChange={e => setExtractedData({ ...extractedData, afternoon: e.target.checked })}
-                  />
-                  <Sun size={18} color="#eab308" />
-                  <span>Afternoon</span>
-                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', background: 'var(--bg-subtle)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '14px', flex: '1' }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(extractedData.afternoon)}
+                      onChange={e => setExtractedData({ ...extractedData, afternoon: e.target.checked })}
+                    />
+                    <Sun size={18} color="#eab308" />
+                    <span>Afternoon</span>
+                  </label>
+                  {extractedData.afternoon && (
+                    <input
+                      type="time"
+                      value={extractedData.afternoon_time || '13:00'}
+                      onChange={e => setExtractedData({ ...extractedData, afternoon_time: e.target.value })}
+                      style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                    />
+                  )}
+                </div>
 
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', background: 'var(--bg-subtle)', cursor: 'pointer', fontSize: '14px' }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(extractedData.night)}
-                    onChange={e => setExtractedData({ ...extractedData, night: e.target.checked })}
-                  />
-                  <Moon size={18} color="#6366f1" />
-                  <span>Night</span>
-                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', background: 'var(--bg-subtle)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '14px', flex: '1' }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(extractedData.night)}
+                      onChange={e => setExtractedData({ ...extractedData, night: e.target.checked })}
+                    />
+                    <Moon size={18} color="#6366f1" />
+                    <span>Night</span>
+                  </label>
+                  {extractedData.night && (
+                    <input
+                      type="time"
+                      value={extractedData.night_time || '21:30'}
+                      onChange={e => setExtractedData({ ...extractedData, night_time: e.target.value })}
+                      style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                    />
+                  )}
+                </div>
               </div>
             </div>
 

@@ -55,7 +55,7 @@ export default function Medications() {
       fetchMeds();
     } catch (err) {
       console.error(err);
-      showToast('Error restocking medicine.', 'error');
+      showToast(err.message || 'Error restocking medicine.', 'error');
     }
   };
 

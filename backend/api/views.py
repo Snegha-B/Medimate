@@ -227,7 +227,8 @@ def upload_prescription(request):
     if ext not in ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'bmp']:
         return Response({'error': 'Invalid file format. Please upload a JPEG, PNG, or PDF file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # ── Stage 1: Upload & Save ──
+    # ── Step 2: Upload request received & File saved ──
+    print(f"[PIPELINE LOG] [OK] Step 2: Upload request received ({uploaded_file.name}, {uploaded_file.size} bytes)")
     presc = Prescription(user=request.user)
     if ext == 'pdf':
         presc.pdf_file = uploaded_file
@@ -236,8 +237,10 @@ def upload_prescription(request):
     presc.save()
     
     file_path = presc.pdf_file.path if presc.pdf_file else (presc.image.path if presc.image else '')
+    print(f"[PIPELINE LOG] [OK] Step 2: File saved to DB (Prescription ID: {presc.id}, Path: {file_path})")
 
-    # ── Stage 2: OCR Extraction + Confidence ──
+    # ── Step 3: OCR Execution ──
+    print(f"[PIPELINE LOG] [OK] Step 3: Tesseract started on file: {file_path}")
     ocr_result = extract_text_from_image(file_path)
 
     # Handle both old (string) and new (dict) return formats for safety
@@ -249,6 +252,11 @@ def upload_prescription(request):
         ocr_confidence = 75.0  # Fallback
 
     presc.ocr_confidence = ocr_confidence
+    print(f"[PIPELINE LOG] [OK] Step 3: OCR completed (OCR Confidence: {ocr_confidence}%)")
+    print(f"[PIPELINE LOG] [OK] Step 3: OCR extracted text (length: {len(raw_text)} chars)")
+
+    # ── Step 4: Print OCR Text ──
+    print("[PIPELINE LOG] [OK] Step 4: OCR Extracted Text:\n--------------------\n" + (raw_text or "[No text extracted]") + "\n--------------------")
 
     # ── Stage 3: Validate OCR Quality ──
     if not raw_text or len(raw_text.strip()) < 5:
@@ -258,6 +266,7 @@ def upload_prescription(request):
         presc.save()
         parsed_data = parse_prescription_text("")
         parsed_data["confidence_score"] = 60.0
+        print("[PIPELINE LOG] Step 4 Warning: Low OCR confidence/length. Returning review required response.")
         return Response({
             'prescription_id': presc.id,
             'raw_text': "Notice: OCR confidence low. Please review and confirm extracted fields.",
@@ -285,7 +294,8 @@ def upload_prescription(request):
     presc.document_type = document_type
     presc.classification_confidence = classification_confidence
 
-    # ── Stage 5: Specialized Extraction + AI Summary ──
+    # ── Step 5: AI Extraction ──
+    print(f"[PIPELINE LOG] [OK] Step 5: Passing OCR text to AI extractor (Document Type: {document_type})")
     extracted_data = {}
     ai_summary = ''
 
@@ -310,7 +320,6 @@ def upload_prescription(request):
         ai_summary = generate_ai_summary('vaccination', extracted_data, raw_text)
 
     elif document_type == 'urine_test':
-        # Urine tests share similar structure with blood tests
         extracted_data = parse_blood_report_text(raw_text)
         ai_summary = generate_ai_summary('urine_test', extracted_data, raw_text)
 
@@ -319,15 +328,15 @@ def upload_prescription(request):
         ai_summary = generate_ai_summary('ecg', extracted_data, raw_text)
 
     else:
-        # Fallback: treat as prescription for backward compatibility
         extracted_data = parse_prescription_text(raw_text)
         ai_summary = generate_ai_summary('unknown', extracted_data, raw_text)
+
+    print(f"[PIPELINE LOG] [OK] Step 5: Extracted Medicines/Data:\n  {extracted_data}")
 
     # Store results on the Prescription model
     presc.raw_ocr_text = raw_text
     presc.ai_summary = ai_summary
 
-    # For prescription-type documents, store doctor fields
     if isinstance(extracted_data, dict):
         presc.doctor_instructions = extracted_data.get('doctor_instructions', '')
         presc.doctor_notes = extracted_data.get('doctor_notes', '')
@@ -337,6 +346,7 @@ def upload_prescription(request):
         presc.status = 'processed'
     presc.save()
     
+    print("[PIPELINE LOG] [OK] Step 8: Returning JSON response to frontend")
     return Response({
         'prescription_id': presc.id,
         'raw_text': raw_text,
@@ -344,7 +354,6 @@ def upload_prescription(request):
         'confidence_score': presc.confidence_score,
         'doctor_instructions': presc.doctor_instructions,
         'doctor_notes': presc.doctor_notes,
-        # New Phase 5 fields
         'document_type': document_type,
         'document_label': document_label,
         'classification_confidence': classification_confidence,
@@ -395,6 +404,22 @@ def confirm_prescription(request):
     dur_days = int(medication_data.get('duration', 1) or 1)
     tot_tablets = int(medication_data.get('total_tablets', 30) or 30)
     
+    def parse_time_str(time_val, default_time):
+        if not time_val:
+            return default_time
+        if isinstance(time_val, datetime.time):
+            return time_val
+        try:
+            parts = str(time_val).split(':')
+            return datetime.time(int(parts[0]), int(parts[1]))
+        except Exception:
+            return default_time
+
+    m_time = parse_time_str(medication_data.get('morning_time'), datetime.time(8, 30))
+    a_time = parse_time_str(medication_data.get('afternoon_time'), datetime.time(13, 0))
+    e_time = parse_time_str(medication_data.get('evening_time'), datetime.time(19, 0))
+    n_time = parse_time_str(medication_data.get('night_time'), datetime.time(21, 30))
+
     med = Medication.objects.create(
         prescription=prescription,
         name=medication_data.get('name', 'Unknown Medication'),
@@ -406,30 +431,46 @@ def confirm_prescription(request):
         remaining_tablets=tot_tablets,
         category=medication_data.get('category', 'General'),
         timing_instruction='before_food' if medication_data.get('before_food') else 'after_food',
-        morning=bool(medication_data.get('morning', True)),
+        morning=bool(medication_data.get('morning', False)),
         afternoon=bool(medication_data.get('afternoon', False)),
         evening=bool(medication_data.get('evening', False)),
-        night=bool(medication_data.get('night', True))
+        night=bool(medication_data.get('night', False)),
+        morning_time=m_time if medication_data.get('morning') else None,
+        afternoon_time=a_time if medication_data.get('afternoon') else None,
+        evening_time=e_time if medication_data.get('evening') else None,
+        night_time=n_time if medication_data.get('night') else None
     )
+    print(f"[PIPELINE LOG] [OK] Step 6: Medicine stored in database (ID: {med.id}, Name: {med.name}, Dosage: {med.dosage})")
     
-    # Auto-generate schedule times for Morning (09:00), Afternoon (14:00), Evening (19:00), Night (21:00)
     slot_times = []
     if med.morning:
-        slot_times.append(datetime.time(9, 0))
+        slot_times.append(med.morning_time or datetime.time(8, 30))
     if med.afternoon:
-        slot_times.append(datetime.time(14, 0))
+        slot_times.append(med.afternoon_time or datetime.time(13, 0))
     if med.evening:
-        slot_times.append(datetime.time(19, 0))
+        slot_times.append(med.evening_time or datetime.time(19, 0))
     if med.night:
-        slot_times.append(datetime.time(21, 0))
+        slot_times.append(med.night_time or datetime.time(21, 30))
 
     if not slot_times:
-        slot_times = [datetime.time(9, 0)]
+        slot_times = [datetime.time(8, 30)]
         
+    schedules_created = 0
     for day in range(med.duration_days):
         for t in slot_times:
             Schedule.objects.create(medication=med, scheduled_time=t, day_offset=day)
+            schedules_created += 1
+
+    print(f"[PIPELINE LOG] [OK] Step 7: Reminder schedule generated ({schedules_created} schedule records saved across {med.duration_days} days)")
+
+    Notification.objects.create(
+        user=request.user,
+        title=f"Reminder Schedule Created: {med.name}",
+        message=f"Automated reminder schedule created for {med.name} ({med.dosage}) - Frequency: {med.frequency}.",
+        notification_type="reminder"
+    )
             
+    print("[PIPELINE LOG] [OK] Step 8: Returned confirmation JSON response to frontend")
     return Response({
         'message': 'Medication saved and automated reminder schedule generated successfully!',
         'medication': MedicationSerializer(med).data
@@ -525,7 +566,11 @@ def log_dose(request):
 
     snooze_time = None
     if status_val == 'snoozed':
-        snooze_time = timezone.now() + datetime.timedelta(minutes=10)
+        try:
+            snooze_mins = int(request.data.get('snooze_minutes', 10) or 10)
+        except (ValueError, TypeError):
+            snooze_mins = 10
+        snooze_time = timezone.now() + datetime.timedelta(minutes=snooze_mins)
 
     log, created = DoseLog.objects.update_or_create(
         schedule=schedule,
@@ -546,12 +591,26 @@ def log_dose(request):
         med.remaining_tablets += 1
         med.save()
 
-    # Phase 4: Alert caregivers on consecutive misses
+    # Phase 4: Alert caregivers & create notifications on missed dose / low stock
     if status_val == 'missed':
+        Notification.objects.create(
+            user=request.user,
+            title=f"Missed Dose Alert: {med.name}",
+            message=f"You recorded a missed dose for {med.name} ({schedule.scheduled_time.strftime('%H:%M')}).",
+            notification_type="missed_dose"
+        )
         try:
             _check_and_alert_caregivers(request.user, med)
         except Exception as e:
             print(f"[MediMate] Caregiver alert error: {e}")
+
+    if med.remaining_tablets <= 5:
+        Notification.objects.create(
+            user=request.user,
+            title=f"Low Stock Warning: {med.name}",
+            message=f"Only {med.remaining_tablets} tablet(s) remaining for {med.name}. Please refill soon.",
+            notification_type="inventory"
+        )
 
     return Response({
         'message': f'Dose status updated to {status_val}',
@@ -930,12 +989,23 @@ def notification_clear(request):
 # ========================================================
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def export_health_report(request):
     import csv
     from django.http import HttpResponse
 
     user = request.user
+    if not user.is_authenticated:
+        token_key = request.GET.get('token')
+        if token_key:
+            try:
+                token = Token.objects.get(key=token_key)
+                user = token.user
+            except Token.DoesNotExist:
+                return Response({'error': 'Invalid authentication token'}, status=status.HTTP_401_UNAUTHORIZED)
+        else:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+
     meds = Medication.objects.filter(prescription__user=user)
     appts = Appointment.objects.filter(user=user)
     caregivers = Caregiver.objects.filter(user=user)
@@ -990,12 +1060,23 @@ def export_health_report(request):
 # ========================================================
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def backup_data(request):
     import json
     from django.http import HttpResponse
 
     user = request.user
+    if not user.is_authenticated:
+        token_key = request.GET.get('token')
+        if token_key:
+            try:
+                token = Token.objects.get(key=token_key)
+                user = token.user
+            except Token.DoesNotExist:
+                return Response({'error': 'Invalid authentication token'}, status=status.HTTP_401_UNAUTHORIZED)
+        else:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+
     meds = Medication.objects.filter(prescription__user=user)
     appts = Appointment.objects.filter(user=user)
     caregivers = Caregiver.objects.filter(user=user)

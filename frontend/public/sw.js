@@ -81,10 +81,15 @@ self.addEventListener('push', (event) => {
     body: payload.body,
     icon: payload.icon || '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
-    vibrate: [200, 100, 200],
+    vibrate: [200, 100, 200, 100, 200],
     data: payload.data || { url: '/' },
+    tag: payload.tag || 'medimate-reminder',
+    renotify: true,
+    requireInteraction: true,
     actions: [
-      { action: 'open', title: 'Open MediMate' }
+      { action: 'take', title: '✅ Take Now' },
+      { action: 'snooze', title: '⏰ Snooze' },
+      { action: 'skip', title: '⏭ Skip' }
     ]
   };
 
@@ -96,15 +101,26 @@ self.addEventListener('push', (event) => {
 // Notification Click Event Handler
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) ? event.notification.data.url : '/';
+  const action = event.action;
+  const data = event.notification.data || {};
+  const targetUrl = data.url || '/';
 
+  // For all actions, focus or open the app
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // Try to find an existing MediMate window and focus it
       for (const client of clientList) {
         if (client.url.includes(self.location.origin) && 'focus' in client) {
+          // Post the action to the client so the app can handle it
+          client.postMessage({
+            type: 'NOTIFICATION_ACTION',
+            action: action || 'open',
+            scheduleId: data.scheduleId
+          });
           return client.focus();
         }
       }
+      // No existing window — open a new one
       if (clients.openWindow) {
         return clients.openWindow(targetUrl);
       }

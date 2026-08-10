@@ -7,6 +7,13 @@ from core.models import Prescription, Medication, Schedule, DoseLog, LabReport, 
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    age = serializers.IntegerField(required=False, allow_null=True)
+    gender = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    blood_group = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    emergency_contact = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    medical_conditions = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    allergies = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
     class Meta:
         model = UserProfile
         fields = [
@@ -66,6 +73,7 @@ class MedicationSerializer(serializers.ModelSerializer):
             'id', 'prescription', 'name', 'dosage', 'frequency', 'duration_days',
             'start_date', 'end_date', 'total_tablets', 'remaining_tablets',
             'category', 'timing_instruction', 'morning', 'afternoon', 'evening', 'night',
+            'morning_time', 'afternoon_time', 'evening_time', 'night_time',
             'expiry_date', 'batch_number',
             'status', 'days_remaining', 'next_reminder', 'history',
             'inventory_status', 'days_supply_remaining', 'expiry_alert_level'

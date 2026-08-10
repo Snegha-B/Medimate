@@ -99,7 +99,7 @@ export default function Dashboard() {
       showToast('Appointment scheduled successfully!', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Error scheduling appointment.', 'error');
+      showToast(err.message || 'Error scheduling appointment.', 'error');
     }
   };
 

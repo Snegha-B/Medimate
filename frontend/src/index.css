@@ -92,7 +92,7 @@ body {
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
-  justify: space-between;
+  justify-content: space-between;
   padding: 0 28px;
   position: sticky;
   top: 0;

@@ -41,7 +41,7 @@ export default function Profile() {
       }
     } catch (err) {
       console.error(err);
-      showToast('Could not load profile details', 'error');
+      showToast(err.message || 'Could not load profile details', 'error');
     } finally {
       setLoading(false);
     }
@@ -51,14 +51,16 @@ export default function Profile() {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.put('/api/profile/', {
+      const payload = {
         email,
-        ...profile
-      });
+        ...profile,
+        age: profile.age === '' || profile.age === null || isNaN(profile.age) ? null : parseInt(profile.age, 10)
+      };
+      await api.put('/api/profile/', payload);
       showToast('Profile updated successfully!', 'success');
     } catch (err) {
       console.error(err);
-      showToast('Error saving profile changes', 'error');
+      showToast(err.message || 'Error saving profile changes', 'error');
     } finally {
       setSaving(false);
     }

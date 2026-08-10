@@ -90,20 +90,6 @@ def parse_lab_report_text(text):
                 'status': status_val
             })
 
-    # If OCR text didn't extract enough, return structured defaults for confirmation
-    if not extracted_values:
-        # Fallback sample parsing
-        sample_tests = ["Fasting Glucose", "HbA1c", "Total Cholesterol"]
-        for st in sample_tests:
-            ref = ReferenceRange.objects.filter(test_name=st).first()
-            if ref:
-                extracted_values.append({
-                    'test_name': ref.test_name,
-                    'value': ref.max_normal + 10.0 if ref.max_normal else 110.0,
-                    'unit': ref.unit,
-                    'status': 'high'
-                })
-
     return extracted_values
 
 def generate_report_correlations(user, lab_values):

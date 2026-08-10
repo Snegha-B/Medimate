@@ -63,6 +63,12 @@ class Medication(models.Model):
     evening = models.BooleanField(default=False)
     night = models.BooleanField(default=True)
 
+    # User-defined reminder slot times
+    morning_time = models.TimeField(null=True, blank=True)
+    afternoon_time = models.TimeField(null=True, blank=True)
+    evening_time = models.TimeField(null=True, blank=True)
+    night_time = models.TimeField(null=True, blank=True)
+
     # Phase 4: Inventory & Expiry Tracking
     expiry_date = models.DateField(null=True, blank=True)
     batch_number = models.CharField(max_length=100, blank=True, null=True)

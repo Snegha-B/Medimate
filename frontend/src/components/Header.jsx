@@ -77,7 +77,7 @@ export default function Header() {
         </span>
 
         {/* Notification Bell with Badge & Dropdown */}
-        <div style={{ position: 'relative' }} ref={dropdownRef}>
+        <div style={{ position: 'relative', display: 'inline-flex' }} ref={dropdownRef}>
           <button
             onClick={() => setShowDropdown(!showDropdown)}
             style={{

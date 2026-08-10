@@ -4,7 +4,8 @@ import { CheckCircle, Clock, XCircle, Flame, Plus, Mic, MicOff, Sunrise, Sun, Mo
 import api from '../services/api';
 import { showToast } from '../components/Toast';
 import { useAccessibility } from '../context/AccessibilityContext';
-import { startListening, VOICE_ACTIONS, speakReminder, speak } from '../services/voiceService';
+import { startListening, VOICE_ACTIONS, speakReminder, speak, stopSpeaking } from '../services/voiceService';
+import { requestNotificationPermission, scheduleAllReminders, cancelReminder, snoozeReminder, getSnoozeOptions, formatScheduleTime } from '../services/reminderService';
 
 export default function Home() {
   const [schedules, setSchedules] = useState([]);
@@ -16,6 +17,9 @@ export default function Home() {
   // Skip reason modal state
   const [skipModalSchedule, setSkipModalSchedule] = useState(null);
   const [skipReason, setSkipReason] = useState('Side effects');
+
+  // Snooze modal state
+  const [snoozeModalSchedule, setSnoozeModalSchedule] = useState(null);
 
   // Reminder escalation tracking: { scheduleId: retryCount }
   const escalationRef = useRef({});
@@ -36,44 +40,70 @@ export default function Home() {
       }
     } catch (err) {
       console.error(err);
-      showToast('Could not load today schedule', 'error');
+      showToast(err.message || 'Could not load today schedule', 'error');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    requestNotificationPermission();
     fetchSchedule();
   }, []);
 
-  const handleAction = async (scheduleId, status, reason = '') => {
+  // Schedule background reminders whenever schedules change
+  useEffect(() => {
+    if (schedules.length === 0) return;
+    const voiceSettings = { enabled: voiceEnabled, lang, speed: speechSpeed };
+    const callbacks = {
+      onReminder: (schedule, repeatCount) => {
+        console.log(`[Reminder] Fired for ${schedule.medication_name} (repeat #${repeatCount})`);
+      },
+      onMissed: (schedule) => {
+        handleAction(schedule.id, 'missed').catch(() => {});
+        showToast(`${schedule.medication_name} marked as Missed after 3 reminders.`, 'info');
+      },
+    };
+    scheduleAllReminders(schedules, callbacks, voiceSettings);
+  }, [schedules, voiceEnabled, lang, speechSpeed]);
+
+  const handleAction = async (scheduleId, status, reason = '', snoozeMins = null) => {
     // Clear escalation for this schedule since user acted
     if (escalationRef.current[scheduleId]) {
       clearTimeout(escalationRef.current[scheduleId]);
       delete escalationRef.current[scheduleId];
     }
+    // Cancel any pending background reminder timers & stop voice
+    cancelReminder(scheduleId);
+    stopSpeaking();
+
     try {
-      const res = await api.post('/api/doselog/', {
+      const body = {
         schedule_id: scheduleId,
         status,
         skip_reason: reason
-      });
+      };
+      if (status === 'snoozed' && snoozeMins) {
+        body.snooze_minutes = snoozeMins;
+      }
+      await api.post('/api/doselog/', body);
 
       if (status === 'taken') {
         showToast('🎉 Dose marked as Taken! Tablet count updated.', 'success');
         if (voiceEnabled) speak('Great job! Medicine marked as taken. Stay healthy!', lang, speechSpeed);
       } else if (status === 'snoozed') {
-        showToast('⏰ Reminder snoozed for 10 minutes.', 'info');
-        if (voiceEnabled) speak('Reminder snoozed for 10 minutes.', lang, speechSpeed);
+        showToast(`⏰ Reminder snoozed for ${snoozeMins || 10} minutes.`, 'info');
+        if (voiceEnabled) speak(`Reminder snoozed for ${snoozeMins || 10} minutes.`, lang, speechSpeed);
       } else if (status === 'skipped') {
-        showToast(`Dose skipped (${reason || 'Recorded'}).`, 'info');
+        showToast(`Dose skipped (${reason || 'Recorded'}). Tablet count unchanged.`, 'info');
       }
 
       setSkipModalSchedule(null);
+      setSnoozeModalSchedule(null);
       fetchSchedule();
     } catch (err) {
       console.error(err);
-      showToast('Error updating dose status', 'error');
+      showToast(err.message || 'Error updating dose status', 'error');
     }
   };
 
@@ -220,12 +250,12 @@ export default function Home() {
             <span>Take Now</span>
           </button>
 
-          {/* Snooze Button */}
+          {/* Snooze Button — opens snooze duration picker */}
           <button
-            onClick={() => handleAction(schedule.id, 'snoozed')}
+            onClick={() => setSnoozeModalSchedule(schedule)}
             className="btn btn-outline"
             style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', color: 'var(--warning-color)', borderColor: 'var(--warning-color)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-            title="Snooze 10 mins"
+            title="Snooze"
           >
             <Clock size={16} />
             <span>Snooze</span>
@@ -375,6 +405,51 @@ export default function Home() {
                 Confirm Skip
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Snooze Duration Modal */}
+      {snoozeModalSchedule && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.6)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '16px'
+        }}>
+          <div className="card" style={{ maxWidth: '380px', width: '100%', padding: '24px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '800', marginBottom: '8px', color: 'var(--text-main)' }}>
+              Snooze Reminder
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+              Snoozing {snoozeModalSchedule.medication_name}. Choose how long:
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+              {getSnoozeOptions().map(opt => (
+                <button
+                  key={opt.minutes}
+                  onClick={() => handleAction(snoozeModalSchedule.id, 'snoozed', '', opt.minutes)}
+                  className="btn btn-outline"
+                  style={{ borderColor: 'var(--warning-color)', color: 'var(--warning-color)', fontWeight: '700' }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setSnoozeModalSchedule(null)}
+              className="btn btn-outline"
+              style={{ width: '100%' }}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
