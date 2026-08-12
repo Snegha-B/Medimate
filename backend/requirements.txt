@@ -10,3 +10,4 @@ pywebpush==2.0.0
 gunicorn==23.0.0
 djangorestframework==3.17.1
 pytesseract==0.3.13
+rapidfuzz==3.14.1
