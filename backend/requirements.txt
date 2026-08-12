@@ -8,3 +8,4 @@ psycopg2-binary==2.9.10
 whitenoise==6.9.0
 pywebpush==2.0.0
 gunicorn==23.0.0
+djangorestframework==3.17.1
