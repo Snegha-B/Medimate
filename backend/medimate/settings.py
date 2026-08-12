@@ -19,7 +19,21 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-zvncp7v238y0x#ssu=hbx
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 't')
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
+allowed_hosts = os.environ.get('ALLOWED_HOSTS', '').strip()
+
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in allowed_hosts.split(',')
+    if host.strip()
+]
+
+render_hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+
+if render_hostname and render_hostname not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(render_hostname)
+
+if not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ['*']
 
 # Application definition
 INSTALLED_APPS = [
