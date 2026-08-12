@@ -5,7 +5,7 @@ import api from '../services/api';
 import { showToast } from '../components/Toast';
 import { useAccessibility } from '../context/AccessibilityContext';
 import { startListening, VOICE_ACTIONS, speakReminder, speak, stopSpeaking } from '../services/voiceService';
-import { requestNotificationPermission, scheduleAllReminders, cancelReminder, snoozeReminder, getSnoozeOptions, formatScheduleTime } from '../services/reminderService';
+import { requestNotificationPermission, scheduleAllReminders, cancelReminder, snoozeReminder, getSnoozeOptions, formatScheduleTime, fetchTodayReminders, markReminderTaken, markReminderSkipped, snoozeReminderBackend, showReminderNotification } from '../services/reminderService';
 
 export default function Home() {
   const [schedules, setSchedules] = useState([]);
@@ -28,6 +28,8 @@ export default function Home() {
   const { lang, voiceEnabled, speechSpeed, settings } = useAccessibility();
   const reminderRepeatCount = settings?.reminder_repeat_count ?? 3;
 
+  const [reminders, setReminders] = useState([]);
+
   const fetchSchedule = async () => {
     try {
       const data = await api.get('/api/schedule/today/');
@@ -38,6 +40,10 @@ export default function Home() {
       if (data.streak !== undefined) {
         setStreak(data.streak);
       }
+      
+      // Fetch backend reminders
+      const todayReminders = await fetchTodayReminders();
+      setReminders(todayReminders || []);
     } catch (err) {
       console.error(err);
       showToast(err.message || 'Could not load today schedule', 'error');
@@ -58,10 +64,11 @@ export default function Home() {
     const callbacks = {
       onReminder: (schedule, repeatCount) => {
         console.log(`[Reminder] Fired for ${schedule.medication_name} (repeat #${repeatCount})`);
+        fetchSchedule();
       },
       onMissed: (schedule) => {
         handleAction(schedule.id, 'missed').catch(() => {});
-        showToast(`${schedule.medication_name} marked as Missed after 3 reminders.`, 'info');
+        showToast(`${schedule.medication_name} marked as Missed after retries.`, 'info');
       },
     };
     scheduleAllReminders(schedules, callbacks, voiceSettings);
@@ -78,6 +85,25 @@ export default function Home() {
     stopSpeaking();
 
     try {
+      // Find the MedicineReminder whose .schedule FK matches this Schedule ID
+      const matchingReminder = reminders.find(
+        r => r.schedule === scheduleId || r.id === scheduleId
+      );
+
+      let updatedReminder = null;
+      if (matchingReminder) {
+        if (status === 'taken') {
+          const res = await markReminderTaken(matchingReminder.id);
+          updatedReminder = res?.reminder || null;
+        } else if (status === 'snoozed') {
+          const res = await snoozeReminderBackend(matchingReminder.id, snoozeMins || 10);
+          updatedReminder = res?.reminder || null;
+        } else if (status === 'skipped') {
+          const res = await markReminderSkipped(matchingReminder.id, reason);
+          updatedReminder = res?.reminder || null;
+        }
+      }
+
       const body = {
         schedule_id: scheduleId,
         status,
@@ -88,12 +114,18 @@ export default function Home() {
       }
       await api.post('/api/doselog/', body);
 
-      if (status === 'taken') {
+      if (status === 'snoozed') {
+        const schObj = schedules.find(s => s.id === scheduleId) || { id: scheduleId };
+        snoozeReminder(schObj, snoozeMins || 10, {
+          onReminder: () => fetchSchedule()
+        }, { enabled: voiceEnabled, lang, speed: speechSpeed });
+
+        const nextTime = updatedReminder?.snoozed_until_formatted || `in ${snoozeMins || 10} min`;
+        showToast(`⏰ Snoozed! Next reminder at ${nextTime}.`, 'info');
+        if (voiceEnabled) speak(`Reminder snoozed. I will remind you again at ${nextTime}.`, lang, speechSpeed);
+      } else if (status === 'taken') {
         showToast('🎉 Dose marked as Taken! Tablet count updated.', 'success');
         if (voiceEnabled) speak('Great job! Medicine marked as taken. Stay healthy!', lang, speechSpeed);
-      } else if (status === 'snoozed') {
-        showToast(`⏰ Reminder snoozed for ${snoozeMins || 10} minutes.`, 'info');
-        if (voiceEnabled) speak(`Reminder snoozed for ${snoozeMins || 10} minutes.`, lang, speechSpeed);
       } else if (status === 'skipped') {
         showToast(`Dose skipped (${reason || 'Recorded'}). Tablet count unchanged.`, 'info');
       }
@@ -170,10 +202,13 @@ export default function Home() {
   }
 
   const renderScheduleCard = (schedule) => {
-    const isTaken = schedule.status === 'taken';
-    const isMissed = schedule.status === 'missed';
-    const isSnoozed = schedule.status === 'snoozed';
-    const isSkipped = schedule.status === 'skipped';
+    // Find corresponding reminder
+    const reminder = reminders.find(r => r.schedule === schedule.id);
+    const finalStatus = reminder ? reminder.status : schedule.status;
+    const isTaken = finalStatus === 'taken';
+    const isMissed = finalStatus === 'missed';
+    const isSnoozed = finalStatus === 'snoozed';
+    const isSkipped = finalStatus === 'skipped';
 
     return (
       <div
@@ -200,8 +235,39 @@ export default function Home() {
               {schedule.medication_name}
             </h3>
             <span className={`badge ${isTaken ? 'badge-green' : isMissed ? 'badge-red' : isSnoozed || isSkipped ? 'badge-amber' : 'badge-blue'}`}>
-              {isTaken ? 'Taken' : isMissed ? 'Missed' : isSnoozed ? 'Snoozed (10m)' : isSkipped ? 'Skipped' : 'Scheduled'}
+              {isTaken ? 'Taken' : isMissed ? 'Missed' : isSnoozed ? 'Snoozed' : isSkipped ? 'Skipped' : 'Scheduled'}
             </span>
+            <div style={{ display: 'flex', gap: '6px', marginLeft: '6px', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (Notification.permission !== 'granted') {
+                    requestNotificationPermission().then(granted => {
+                      if (granted) showToast('Notification permission granted!', 'success');
+                      else showToast('Notification permission denied by browser.', 'error');
+                    });
+                  } else {
+                    showReminderNotification(schedule);
+                    showToast(`🔔 Reminder notification triggered for ${schedule.medication_name}`, 'info');
+                  }
+                }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: Notification.permission === 'granted' ? 1 : 0.4, padding: 0 }}
+                title="Notification Enabled - Click to test notification"
+              >
+                🔔
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  speakReminder(schedule, lang, speechSpeed);
+                  showToast(`🔊 Playing voice reminder for ${schedule.medication_name}`, 'info');
+                }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: voiceEnabled ? 1 : 0.4, padding: 0 }}
+                title="Voice Enabled - Click to test voice reminder"
+              >
+                🔊
+              </button>
+            </div>
           </div>
 
           <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: 0 }}>
@@ -214,6 +280,14 @@ export default function Home() {
           {schedule.remaining_tablets !== undefined && (
             <div style={{ fontSize: '12px', color: schedule.remaining_tablets < 5 ? 'var(--danger-color)' : 'var(--text-secondary)', marginTop: '4px', fontWeight: '600' }}>
               {schedule.remaining_tablets} Tablets Remaining
+            </div>
+          )}
+
+          {/* Show next snooze time if snoozed */}
+          {isSnoozed && reminder?.snoozed_until_formatted && (
+            <div style={{ fontSize: '12px', color: 'var(--warning-color)', marginTop: '6px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Clock size={13} />
+              <span>Next reminder at {reminder.snoozed_until_formatted}</span>
             </div>
           )}
         </div>

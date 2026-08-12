@@ -27,12 +27,41 @@ export default function Settings() {
   const { settings, updateSettings } = useAccessibility();
   const fileInputRef = useRef(null);
 
+  const [notificationPrefs, setNotificationPrefs] = useState({
+    in_app_enabled: true,
+    push_enabled: true,
+    email_enabled: true,
+    voice_enabled: true
+  });
+
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'granted') {
       setRemindersEnabled(true);
     }
     fetchCaregivers();
+    fetchNotificationPrefs();
   }, []);
+
+  const fetchNotificationPrefs = async () => {
+    try {
+      const data = await api.get('/api/notification-preferences/');
+      setNotificationPrefs(data);
+    } catch (err) {
+      console.error('Error fetching notification preferences:', err);
+    }
+  };
+
+  const handleUpdatePreference = async (key, val) => {
+    try {
+      const updated = { ...notificationPrefs, [key]: val };
+      setNotificationPrefs(updated);
+      await api.put('/api/notification-preferences/', { [key]: val });
+      showToast('Notification preferences updated.', 'success');
+    } catch (err) {
+      console.error('Error updating preference:', err);
+      showToast('Failed to update preference.', 'error');
+    }
+  };
 
   const fetchCaregivers = async () => {
     try {
@@ -237,23 +266,35 @@ export default function Settings() {
 
       {/* App Preferences Section */}
       <div className="card" style={{ marginBottom: '24px' }}>
-        <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '4px', color: 'var(--primary-color)' }}>App Preferences</h3>
+        <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '12px', color: 'var(--primary-color)' }}>Notification Channels</h3>
         <SettingRow
           icon={<Bell size={22} color="var(--primary-color)" />}
-          title="Push Reminders"
-          subtitle="Dose schedule notifications"
+          title="In-App Notifications"
+          subtitle="Display reminders inside MediMate"
         >
-          <Toggle checked={remindersEnabled} onChange={handleToggleReminders} />
+          <Toggle checked={notificationPrefs.in_app_enabled} onChange={() => handleUpdatePreference('in_app_enabled', !notificationPrefs.in_app_enabled)} />
         </SettingRow>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Smartphone size={22} color="var(--primary-color)" />
-            <div>
-              <div style={{ fontWeight: '600', fontSize: '15px' }}>MediMate Version</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>v3.0 AI Smart Medication Assistant</div>
-            </div>
-          </div>
-        </div>
+        <SettingRow
+          icon={<Smartphone size={22} color="var(--primary-color)" />}
+          title="Push Notifications"
+          subtitle="Receive push reminders when app is closed"
+        >
+          <Toggle checked={notificationPrefs.push_enabled} onChange={() => handleUpdatePreference('push_enabled', !notificationPrefs.push_enabled)} />
+        </SettingRow>
+        <SettingRow
+          icon={<Globe size={22} color="var(--primary-color)" />}
+          title="Email Reminders"
+          subtitle="Receive reminders via registered email address"
+        >
+          <Toggle checked={notificationPrefs.email_enabled} onChange={() => handleUpdatePreference('email_enabled', !notificationPrefs.email_enabled)} />
+        </SettingRow>
+        <SettingRow
+          icon={<Volume2 size={22} color="var(--primary-color)" />}
+          title="Voice Reminders (Audio)"
+          subtitle="Speak reminders aloud automatically"
+        >
+          <Toggle checked={notificationPrefs.voice_enabled} onChange={() => handleUpdatePreference('voice_enabled', !notificationPrefs.voice_enabled)} />
+        </SettingRow>
       </div>
 
       {/* ===================== PHASE 3: Language & Voice Card ===================== */}

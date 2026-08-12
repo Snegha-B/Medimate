@@ -5,8 +5,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate, login as django_login
-from core.models import Prescription, Medication, Schedule, DoseLog, PushSubscription, LabReport, LabValue, ReferenceRange, ShareToken, UserProfile, Caregiver, Appointment, Notification
-from .serializers import UserSerializer, PrescriptionSerializer, MedicationSerializer, ScheduleSerializer, DoseLogSerializer, LabReportSerializer, LabValueSerializer, ShareTokenSerializer, UserProfileSerializer, CaregiverSerializer, AppointmentSerializer, NotificationSerializer
+from core.models import Prescription, Medication, Schedule, DoseLog, PushSubscription, LabReport, LabValue, ReferenceRange, ShareToken, UserProfile, Caregiver, Appointment, Notification, MedicineReminder, NotificationPreference
+from .serializers import UserSerializer, PrescriptionSerializer, MedicationSerializer, ScheduleSerializer, DoseLogSerializer, LabReportSerializer, LabValueSerializer, ShareTokenSerializer, UserProfileSerializer, CaregiverSerializer, AppointmentSerializer, NotificationSerializer, MedicineReminderSerializer, NotificationPreferenceSerializer
 from core.services.ocr_service import extract_text_from_image
 from core.services.nlp_service import parse_prescription_text, parse_blood_report_text, parse_imaging_report_text, parse_discharge_summary_text, parse_vaccination_text, generate_ai_summary
 from core.services.classifier_service import classify_document
@@ -1483,6 +1483,191 @@ def enhanced_analytics(request):
         'medicine_timeline': timeline,
         'enhanced_insights': enhanced_insights,
     })
+
+
+# ========================================================
+# PHASE 6: MEDICINE REMINDER NOTIFICATION SYSTEM VIEWS
+# ========================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def reminders_list(request):
+    """GET today's reminders for the authenticated user."""
+    import pytz
+    user = request.user
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    try:
+        user_tz = pytz.timezone(profile.timezone)
+    except Exception:
+        user_tz = pytz.timezone('Asia/Kolkata')
+        
+    local_date = timezone.now().astimezone(user_tz).date()
+    
+    # Auto-generate if missing for today
+    from django.core.management import call_command
+    call_command('generate_daily_reminders')
+    
+    reminders = MedicineReminder.objects.filter(user=user, reminder_date=local_date)
+    serializer = MedicineReminderSerializer(reminders, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def upcoming_reminders(request):
+    """GET upcoming reminders."""
+    reminders = MedicineReminder.objects.filter(
+        user=request.user, 
+        status='pending'
+    ).order_by('reminder_date', 'reminder_time')[:10]
+    serializer = MedicineReminderSerializer(reminders, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reminder_mark_taken(request, pk):
+    """POST to mark a specific reminder as Taken."""
+    try:
+        reminder = MedicineReminder.objects.get(pk=pk, user=request.user)
+    except MedicineReminder.DoesNotExist:
+        return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    reminder.status = 'taken'
+    reminder.save()
+
+    # Sync with DoseLog if schedule is present
+    if reminder.schedule:
+        # Check if already logged
+        log, created = DoseLog.objects.update_or_create(
+            schedule=reminder.schedule,
+            defaults={'status': 'taken'}
+        )
+        
+        # Decrement medication count if not already marked taken
+        med = reminder.schedule.medication
+        if created:
+            if med.remaining_tablets > 0:
+                med.remaining_tablets -= 1
+                med.save()
+
+    return Response({
+        'message': 'Reminder marked as taken successfully',
+        'reminder': MedicineReminderSerializer(reminder).data
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reminder_snooze(request, pk):
+    """POST to snooze a specific reminder by N minutes."""
+    try:
+        reminder = MedicineReminder.objects.get(pk=pk, user=request.user)
+    except MedicineReminder.DoesNotExist:
+        return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        snooze_mins = int(request.data.get('snooze_minutes', 10) or 10)
+    except (ValueError, TypeError):
+        snooze_mins = 10
+
+    snooze_time = timezone.now() + datetime.timedelta(minutes=snooze_mins)
+
+    reminder.status = 'snoozed'
+    reminder.snoozed_until = snooze_time
+    # Clear notification flags so the scheduler fires all channels again on wake
+    reminder.notification_sent = False
+    reminder.push_sent = False
+    reminder.email_sent = False
+    reminder.retry_count = 0
+    reminder.next_retry_at = None
+    reminder.save()
+
+    # Sync DoseLog
+    if reminder.schedule:
+        DoseLog.objects.update_or_create(
+            schedule=reminder.schedule,
+            defaults={'status': 'snoozed', 'snoozed_until': snooze_time}
+        )
+
+    return Response({
+        'message': f'Reminder snoozed for {snooze_mins} minutes',
+        'snoozed_until': snooze_time.isoformat(),
+        'reminder': MedicineReminderSerializer(reminder).data
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reminder_mark_skipped(request, pk):
+    """POST to mark a specific reminder as Skipped."""
+    try:
+        reminder = MedicineReminder.objects.get(pk=pk, user=request.user)
+    except MedicineReminder.DoesNotExist:
+        return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    skip_reason = request.data.get('skip_reason', '')
+    reminder.status = 'skipped'
+    reminder.save()
+
+    # Sync with DoseLog if schedule is present
+    if reminder.schedule:
+        DoseLog.objects.update_or_create(
+            schedule=reminder.schedule,
+            defaults={'status': 'skipped', 'skip_reason': skip_reason}
+        )
+
+    return Response({
+        'message': 'Reminder marked as skipped successfully',
+        'reminder': MedicineReminderSerializer(reminder).data
+    })
+
+
+
+@api_view(['GET', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def reminder_detail(request, pk):
+    """GET or DELETE a specific reminder."""
+    try:
+        reminder = MedicineReminder.objects.get(pk=pk, user=request.user)
+    except MedicineReminder.DoesNotExist:
+        return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response(MedicineReminderSerializer(reminder).data)
+    elif request.method == 'DELETE':
+        reminder.delete()
+        return Response({'message': 'Reminder deleted successfully'})
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def notification_preferences_view(request):
+    """GET or PUT user's notification preferences."""
+    prefs, _ = NotificationPreference.objects.get_or_create(user=request.user)
+
+    if request.method == 'GET':
+        serializer = NotificationPreferenceSerializer(prefs)
+        return Response(serializer.data)
+    elif request.method == 'PUT':
+        serializer = NotificationPreferenceSerializer(prefs, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def unsubscribe_push(request):
+    """Unsubscribe push subscription for user."""
+    endpoint = request.data.get('endpoint')
+    if not endpoint:
+        return Response({'error': 'Endpoint required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    PushSubscription.objects.filter(user=request.user, endpoint=endpoint).delete()
+    return Response({'message': 'Push subscription removed successfully'})
+
 
 
 

@@ -143,6 +143,61 @@ VAPID_PRIVATE_KEY = os.environ.get(
 )
 VAPID_ADMIN_EMAIL = os.environ.get('VAPID_ADMIN_EMAIL', 'admin@medimate.app')
 
+# ─── Email Configuration ───
+# Uses SMTP by default. Falls back to console backend if EMAIL_HOST_USER is not set.
+_email_user = os.environ.get('EMAIL_HOST_USER', '')
+if _email_user:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() in ('true', '1', 't')
+EMAIL_HOST_USER = _email_user
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.environ.get('EMAIL_FROM', 'MediMate <noreply@medimate.app>')
+
+# ─── Reminder Scheduler Configuration ───
+REMINDER_RETRY_INTERVAL_MINUTES = int(os.environ.get('REMINDER_RETRY_INTERVAL_MINUTES', '15'))
+REMINDER_MAX_RETRIES = int(os.environ.get('REMINDER_MAX_RETRIES', '2'))
+REMINDER_CHECK_INTERVAL_SECONDS = int(os.environ.get('REMINDER_CHECK_INTERVAL_SECONDS', '60'))
+
+# ─── Logging ───
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{asctime}] [{levelname}] [{name}] {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'medimate': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+        'medimate.scheduler': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'medimate.email': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

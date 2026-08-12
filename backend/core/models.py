@@ -201,6 +201,9 @@ class UserProfile(models.Model):
     large_text = models.BooleanField(default=False)
     reminder_repeat_count = models.IntegerField(default=3)
 
+    # Phase 6: Timezone for correct reminder scheduling
+    timezone = models.CharField(max_length=50, default='Asia/Kolkata')
+
     def __str__(self):
         return f"Profile for {self.user.username}"
 
@@ -263,3 +266,104 @@ class Notification(models.Model):
         return f"{self.title} - {self.user.username} (Read: {self.is_read})"
 
 
+# ========================================================
+# PHASE 6: MEDICINE REMINDER NOTIFICATION SYSTEM
+# ========================================================
+
+class MedicineReminder(models.Model):
+    """
+    Per-dose reminder instance — the source of truth for the backend scheduler.
+    Each record represents ONE reminder for ONE dose of ONE medicine on ONE date.
+    The backend scheduler checks these records and triggers notifications.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('taken', 'Taken'),
+        ('snoozed', 'Snoozed'),
+        ('skipped', 'Skipped'),
+        ('missed', 'Missed'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='medicine_reminders')
+    medication = models.ForeignKey(Medication, on_delete=models.CASCADE, related_name='reminders', null=True, blank=True)
+    schedule = models.ForeignKey(Schedule, on_delete=models.SET_NULL, null=True, blank=True, related_name='reminders')
+
+    # Denormalized fields for quick access (medication might be deleted)
+    medicine_name = models.CharField(max_length=255)
+    dosage = models.CharField(max_length=100, blank=True, default='')
+
+    # When to remind
+    reminder_date = models.DateField()
+    reminder_time = models.TimeField()
+    timezone = models.CharField(max_length=50, default='Asia/Kolkata')
+
+    # Status tracking
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+
+    # Notification delivery tracking (prevents duplicate sends)
+    notification_sent = models.BooleanField(default=False)
+    push_sent = models.BooleanField(default=False)
+    email_sent = models.BooleanField(default=False)
+
+    # Retry logic
+    retry_count = models.IntegerField(default=0)
+    max_retries = models.IntegerField(default=2)
+    retry_interval_minutes = models.IntegerField(default=15)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+
+    # Snooze
+    snoozed_until = models.DateTimeField(null=True, blank=True)
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'medication', 'reminder_date', 'reminder_time')
+        ordering = ['reminder_date', 'reminder_time']
+        indexes = [
+            models.Index(fields=['status', 'reminder_date', 'reminder_time']),
+            models.Index(fields=['user', 'reminder_date']),
+        ]
+
+    def __str__(self):
+        return f"Reminder: {self.medicine_name} for {self.user.username} at {self.reminder_time} on {self.reminder_date} [{self.status}]"
+
+
+class NotificationPreference(models.Model):
+    """Per-user notification channel preferences."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='notification_preferences')
+    in_app_enabled = models.BooleanField(default=True)
+    push_enabled = models.BooleanField(default=True)
+    email_enabled = models.BooleanField(default=True)
+    voice_enabled = models.BooleanField(default=True)
+
+    def __str__(self):
+        channels = []
+        if self.in_app_enabled: channels.append('InApp')
+        if self.push_enabled: channels.append('Push')
+        if self.email_enabled: channels.append('Email')
+        if self.voice_enabled: channels.append('Voice')
+        return f"NotifPrefs for {self.user.username}: {', '.join(channels)}"
+
+
+class FCMDevice(models.Model):
+    """
+    Stores FCM device tokens for future native push notification support.
+    Separate from PushSubscription which handles VAPID web push.
+    """
+    DEVICE_TYPE_CHOICES = [
+        ('web', 'Web Browser'),
+        ('android', 'Android'),
+        ('ios', 'iOS'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fcm_devices')
+    registration_id = models.TextField(unique=True)
+    device_type = models.CharField(max_length=10, choices=DEVICE_TYPE_CHOICES, default='web')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"FCMDevice ({self.device_type}) for {self.user.username} (Active: {self.is_active})"

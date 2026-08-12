@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { showToast } from './Toast';
+import api from '../services/api';
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -18,8 +19,8 @@ export default function PwaPrompt() {
   const [pushStatus, setPushStatus] = useState('default'); // 'default', 'subscribed', 'denied'
 
   useEffect(() => {
-    // 1. Register Service Worker
-    if ('serviceWorker' in navigator) {
+    // 1. Register Service Worker (only in production build or when enabled)
+    if ('serviceWorker' in navigator && import.meta.env.PROD) {
       navigator.serviceWorker.register('/sw.js')
         .then((reg) => console.log('[SW] Registered successfully:', reg))
         .catch((err) => console.error('[SW] Registration failed:', err));
@@ -90,12 +91,8 @@ export default function PwaPrompt() {
         applicationServerKey: convertedVapidKey
       });
 
-      // Send subscription object to backend
-      await fetch('/api/push/subscribe/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(subscription.toJSON())
-      });
+      // Send subscription object to backend using authenticated api helper
+      await api.post('/api/push/subscribe/', subscription.toJSON());
 
       setPushStatus('subscribed');
       showToast('Reminders enabled successfully!', 'success');

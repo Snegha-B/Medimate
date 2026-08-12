@@ -38,8 +38,16 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
-  // Don't intercept API requests or browser extensions
-  if (event.request.url.includes('/api/') || event.request.url.startsWith('chrome-extension')) {
+  const url = new URL(event.request.url);
+
+  // Don't intercept API requests, browser extensions, or Vite HMR/dev server internal modules
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.protocol.startsWith('chrome-extension') ||
+    url.pathname.includes('@vite') ||
+    url.pathname.includes('@react-refresh') ||
+    url.search.includes('t=')
+  ) {
     return;
   }
 
@@ -53,7 +61,9 @@ self.addEventListener('fetch', (event) => {
           });
         }
         return networkResponse;
-      }).catch(() => cachedResponse);
+      }).catch(() => {
+        return cachedResponse || new Response('Network error occurred', { status: 480, statusText: 'Offline' });
+      });
 
       return cachedResponse || fetchPromise;
     })
@@ -62,6 +72,9 @@ self.addEventListener('fetch', (event) => {
 
 // Web Push Notification Handler
 self.addEventListener('push', (event) => {
+  console.log('[Push Debug]');
+  console.log('Service worker registered: YES');
+  console.log('Push event received: YES');
   let payload = {
     title: 'MediMate Reminder',
     body: 'Time to check your medication schedule!',
@@ -94,7 +107,9 @@ self.addEventListener('push', (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(payload.title, options)
+    self.registration.showNotification(payload.title, options).then(() => {
+      console.log('System notification displayed: YES');
+    })
   );
 });
 
@@ -104,26 +119,58 @@ self.addEventListener('notificationclick', (event) => {
   const action = event.action;
   const data = event.notification.data || {};
   const targetUrl = data.url || '/';
+  const scheduleId = data.scheduleId;
 
-  // For all actions, focus or open the app
+  const handleBackendAction = async () => {
+    if (!scheduleId) return;
+
+    // Retrieve authentication token stored in localStorage (available to SW client windows)
+    // For direct service worker calls, we can try to fetch the client token or pass it
+    // Service Worker doesn't have direct access to localStorage, but we can look for clients or rely on session cookies/Token header
+    // We'll perform the API request. Since DRF Token is stored, we'll try to let the page handle it if a client is open.
+    // If not, we will attempt the request directly.
+    try {
+      let endpoint = '';
+      if (action === 'take') {
+        endpoint = `/api/reminders/${scheduleId}/taken/`;
+      } else if (action === 'snooze') {
+        endpoint = `/api/reminders/${scheduleId}/snooze/`;
+      } else if (action === 'skip') {
+        endpoint = `/api/reminders/${scheduleId}/skip/`;
+      }
+      
+      if (endpoint) {
+        // Fetch from backend (cookies/session auth will propagate if configured, or client will catch on focus)
+        await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+      }
+    } catch (err) {
+      console.error('[SW] Action API call failed:', err);
+    }
+  };
+
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // Try to find an existing MediMate window and focus it
-      for (const client of clientList) {
-        if (client.url.includes(self.location.origin) && 'focus' in client) {
-          // Post the action to the client so the app can handle it
-          client.postMessage({
-            type: 'NOTIFICATION_ACTION',
-            action: action || 'open',
-            scheduleId: data.scheduleId
-          });
-          return client.focus();
+    Promise.all([
+      handleBackendAction(),
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+        for (const client of clientList) {
+          if (client.url.includes(self.location.origin) && 'focus' in client) {
+            client.postMessage({
+              type: 'NOTIFICATION_ACTION',
+              action: action || 'open',
+              scheduleId: scheduleId
+            });
+            return client.focus();
+          }
         }
-      }
-      // No existing window — open a new one
-      if (clients.openWindow) {
-        return clients.openWindow(targetUrl);
-      }
-    })
+        if (clients.openWindow) {
+          return clients.openWindow(targetUrl);
+        }
+      })
+    ])
   );
 });

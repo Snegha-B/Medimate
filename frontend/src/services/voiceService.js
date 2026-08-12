@@ -22,15 +22,26 @@ const LANG_LOCALE_MAP = {
  */
 export function speak(text, lang = 'en', speed = 1.0) {
   if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel(); // Cancel any ongoing speech
+  try {
+    window.speechSynthesis.cancel(); // Cancel any ongoing speech
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = LANG_LOCALE_MAP[lang] || 'en-IN';
-  utterance.rate = speed;
-  utterance.pitch = 1.0;
-  utterance.volume = 1.0;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = LANG_LOCALE_MAP[lang] || 'en-IN';
+    utterance.rate = speed;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
 
-  window.speechSynthesis.speak(utterance);
+    utterance.onerror = (err) => {
+      console.warn('[VoiceService] SpeechSynthesis utterance error:', err);
+    };
+
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.warn('[VoiceService] speak failed:', err);
+  }
 }
 
 /**
@@ -90,8 +101,10 @@ export function speakReminder(schedule, lang = 'en', speed = 1.0) {
   }
 
   let greeting = 'Morning';
-  if (hour >= 12 && hour < 17) greeting = 'Afternoon';
-  else if (hour >= 17) greeting = 'Evening';
+  if (hour >= 5 && hour < 12) greeting = 'Morning';
+  else if (hour >= 12 && hour < 17) greeting = 'Afternoon';
+  else if (hour >= 17 && hour < 21) greeting = 'Evening';
+  else greeting = 'Night';
 
   const name = schedule.medication_name || 'medicine';
   const dosage = schedule.dosage || '1 tablet';
@@ -115,7 +128,7 @@ export function speakReminder(schedule, lang = 'en', speed = 1.0) {
 
   const textByLang = {
     en: `Good ${greeting}. ${displayTime ? `It is now ${displayTime}. ` : ''}This is your medicine reminder. Please take ${name} ${dosage} ${food}. Once you've taken it, tap Take Now. If you want to postpone it, tap Snooze.`,
-    hi: `${greeting === 'Morning' ? 'सुप्रभात' : greeting === 'Afternoon' ? 'नमस्कार' : 'शुभ संध्या'}। ${displayTime ? `अभी ${displayTime} बज रहे हैं। ` : ''}यह आपकी दवाई की याद है। कृपया ${name} ${dosage} ${food} लें। लेने के बाद Take Now दबाएं। बाद में लेना हो तो Snooze दबाएं।`,
+    hi: `${greeting === 'Morning' ? 'सुप्रभात' : greeting === 'Afternoon' ? 'नमस्कार' : greeting === 'Evening' ? 'शुभ संध्या' : 'शुभ रात्रि'}। ${displayTime ? `अभी ${displayTime} बज रहे हैं। ` : ''}यह आपकी दवाई की याद है। कृपया ${name} ${dosage} ${food} लें। लेने के बाद Take Now दबाएं। बाद में लेना हो तो Snooze दबाएं।`,
     kn: `${greeting === 'Morning' ? 'ಶುಭೋದಯ' : greeting === 'Afternoon' ? 'ನಮಸ್ಕಾರ' : 'ಶುಭ ಸಂಜೆ'}. ಈಗ ನಿಮ್ಮ ${name} ತೆಗೆದುಕೊಳ್ಳುವ ಸಮಯ. ${food} ${dosage} ತೆಗೆದುಕೊಳ್ಳಿ.`,
     ta: `${greeting === 'Morning' ? 'காலை வணக்கம்' : greeting === 'Afternoon' ? 'மதிய வணக்கம்' : 'மாலை வணக்கம்'}. இப்போது உங்கள் ${name} எடுக்கும் நேரம். ${food} ${dosage} எடுக்கவும்.`,
     te: `${greeting === 'Morning' ? 'శుభోదయం' : greeting === 'Afternoon' ? 'నమస్కారం' : 'శుభ సాయంత్రం'}. ఇప్పుడు మీ ${name} తీసుకునే సమయం. ${food} ${dosage} తీసుకోండి.`,

@@ -44,6 +44,15 @@ urlpatterns = [
     path('reports/export/', views.export_health_report, name='export_health_report'),
     path('settings/backup/', views.backup_data, name='backup_data'),
     path('settings/restore/', views.restore_data, name='restore_data'),
+    # Phase 6: Medicine Reminder & Preferences Endpoints
+    path('reminders/', views.reminders_list, name='reminders_list'),
+    path('reminders/upcoming/', views.upcoming_reminders, name='upcoming_reminders'),
+    path('reminders/<int:pk>/taken/', views.reminder_mark_taken, name='reminder_mark_taken'),
+    path('reminders/<int:pk>/snooze/', views.reminder_snooze, name='reminder_snooze'),
+    path('reminders/<int:pk>/skip/', views.reminder_mark_skipped, name='reminder_mark_skipped'),
+    path('reminders/<int:pk>/', views.reminder_detail, name='reminder_detail'),
+    path('notification-preferences/', views.notification_preferences_view, name='notification_preferences_view'),
+    path('push/unsubscribe/', views.unsubscribe_push, name='unsubscribe_push'),
 ]
 
 

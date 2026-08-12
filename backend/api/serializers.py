@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.utils import timezone
 import datetime
-from core.models import Prescription, Medication, Schedule, DoseLog, LabReport, LabValue, ShareToken, UserProfile, Caregiver, Appointment, Notification
+from core.models import Prescription, Medication, Schedule, DoseLog, LabReport, LabValue, ShareToken, UserProfile, Caregiver, Appointment, Notification, MedicineReminder, NotificationPreference
 
 
 
@@ -165,13 +165,15 @@ class ScheduleSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     skip_reason = serializers.SerializerMethodField()
     time_slot = serializers.SerializerMethodField()
+    snoozed_until = serializers.SerializerMethodField()
 
     class Meta:
         model = Schedule
         fields = [
             'id', 'medication', 'scheduled_time', 'day_offset',
             'medication_name', 'dosage', 'frequency', 'duration_days', 'start_date',
-            'timing_instruction', 'category', 'remaining_tablets', 'status', 'skip_reason', 'time_slot'
+            'timing_instruction', 'category', 'remaining_tablets', 'status', 'skip_reason',
+            'time_slot', 'snoozed_until'
         ]
 
     def get_status(self, obj):
@@ -181,6 +183,15 @@ class ScheduleSerializer(serializers.ModelSerializer):
     def get_skip_reason(self, obj):
         log = DoseLog.objects.filter(schedule=obj).first()
         return log.skip_reason if log else None
+
+    def get_snoozed_until(self, obj):
+        """Return the snoozed_until ISO string from the latest DoseLog.
+        This allows the frontend scheduler to correctly re-schedule a snoozed
+        reminder after a page refresh, using the precise absolute snooze time."""
+        log = DoseLog.objects.filter(schedule=obj).first()
+        if log and log.snoozed_until:
+            return log.snoozed_until.isoformat()
+        return None
 
     def get_time_slot(self, obj):
         h = obj.scheduled_time.hour
@@ -231,4 +242,39 @@ class NotificationSerializer(serializers.ModelSerializer):
         model = Notification
         fields = ['id', 'title', 'message', 'notification_type', 'is_read', 'created_at']
         read_only_fields = ['created_at']
+
+
+class MedicineReminderSerializer(serializers.ModelSerializer):
+    formatted_time = serializers.SerializerMethodField()
+    snoozed_until_formatted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MedicineReminder
+        fields = [
+            'id', 'schedule', 'medicine_name', 'dosage', 'reminder_date', 'reminder_time',
+            'formatted_time', 'timezone', 'status', 'notification_sent', 'push_sent',
+            'email_sent', 'retry_count', 'max_retries', 'snoozed_until', 'snoozed_until_formatted'
+        ]
+
+    def get_formatted_time(self, obj):
+        return obj.reminder_time.strftime('%I:%M %p') if obj.reminder_time else ''
+
+    def get_snoozed_until_formatted(self, obj):
+        """Return snoozed_until in local IST time as human-readable string."""
+        if not obj.snoozed_until:
+            return None
+        import pytz
+        try:
+            user_tz = pytz.timezone(obj.timezone or 'Asia/Kolkata')
+        except Exception:
+            user_tz = pytz.timezone('Asia/Kolkata')
+        local_dt = obj.snoozed_until.astimezone(user_tz)
+        return local_dt.strftime('%I:%M %p')
+
+
+class NotificationPreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NotificationPreference
+        fields = ['in_app_enabled', 'push_enabled', 'email_enabled', 'voice_enabled']
+
 
