@@ -55,6 +55,3 @@ urlpatterns = [
     path('push/unsubscribe/', views.unsubscribe_push, name='unsubscribe_push'),
 ]
 
-
-
-

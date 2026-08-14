@@ -1503,10 +1503,6 @@ def reminders_list(request):
         
     local_date = timezone.now().astimezone(user_tz).date()
     
-    # Auto-generate if missing for today
-    from django.core.management import call_command
-    call_command('generate_daily_reminders')
-    
     reminders = MedicineReminder.objects.filter(user=user, reminder_date=local_date)
     serializer = MedicineReminderSerializer(reminders, many=True)
     return Response(serializer.data)
