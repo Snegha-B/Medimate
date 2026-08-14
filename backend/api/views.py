@@ -1493,19 +1493,32 @@ def enhanced_analytics(request):
 @permission_classes([IsAuthenticated])
 def reminders_list(request):
     """GET today's reminders for the authenticated user."""
-    import pytz
-    user = request.user
-    profile, _ = UserProfile.objects.get_or_create(user=user)
     try:
-        user_tz = pytz.timezone(profile.timezone)
-    except Exception:
-        user_tz = pytz.timezone('Asia/Kolkata')
+        import pytz
+        user = request.user
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        try:
+            user_tz = pytz.timezone(profile.timezone)
+        except Exception:
+            user_tz = pytz.timezone('Asia/Kolkata')
+            
+        local_date = timezone.now().astimezone(user_tz).date()
         
-    local_date = timezone.now().astimezone(user_tz).date()
-    
-    reminders = MedicineReminder.objects.filter(user=user, reminder_date=local_date)
-    serializer = MedicineReminderSerializer(reminders, many=True)
-    return Response(serializer.data)
+        reminders = MedicineReminder.objects.filter(user=user, reminder_date=local_date)
+        serializer = MedicineReminderSerializer(reminders, many=True)
+        return Response(serializer.data)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("REMINDERS_LIST_ERROR")
+        return Response(
+            {
+                "error": "reminders_list failed",
+                "detail": str(e),
+                "exception_type": type(e).__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @api_view(['GET'])
