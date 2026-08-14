@@ -1,4 +1,4 @@
-﻿asgiref==3.11.1
+asgiref==3.11.1
 Django==6.0.7
 django-cors-headers==4.9.0
 sqlparse==0.5.5
@@ -11,3 +11,4 @@ gunicorn==23.0.0
 djangorestframework==3.17.1
 pytesseract==0.3.13
 rapidfuzz==3.14.1
+pytz==2026.3.post1
