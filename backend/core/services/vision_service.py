@@ -15,6 +15,8 @@ import logging
 import os
 import io
 import gc
+import json
+from PIL import Image
 
 logger = logging.getLogger('medimate.vision')
 
@@ -177,8 +179,6 @@ def analyze_document_image(image_path):
 
     try:
         from google.genai import types
-        import json
-        from PIL import Image
 
         ext = os.path.splitext(image_path)[1].lower()
         image_bytes = None
