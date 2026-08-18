@@ -448,10 +448,24 @@ def upload_prescription(request):
         if presc.status != 'review_required':
             presc.status = 'processed'
         presc.save()
+
+        # If document is classified as lab report/blood test, ensure LabReport record exists
+        lab_report_id = None
+        if document_type in ('blood_test', 'urine_test', 'lab_report'):
+            try:
+                lab_rep = LabReport.objects.create(
+                    user=request.user,
+                    image=presc.image if presc.image else None,
+                    raw_ocr_text=raw_text
+                )
+                lab_report_id = lab_rep.id
+            except Exception as e:
+                logger.warning(f"Auto-creating LabReport in upload_prescription error: {e}")
         
         print("[PIPELINE LOG] [OK] Step 8: Returning JSON response to frontend")
         return Response({
             'prescription_id': presc.id,
+            'report_id': lab_report_id or presc.id,
             'raw_text': raw_text,
             'extracted_data': extracted_data,
             'confidence_score': presc.confidence_score,
@@ -938,21 +952,46 @@ def upload_lab_report(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def confirm_lab_report(request):
-    report_id = request.data.get('report_id')
+    report_id = request.data.get('report_id') or request.data.get('id') or request.data.get('lab_report_id')
     values_data = request.data.get('values', [])
 
+    print(f"[LAB SAVE] Received report_id: {report_id}")
+    print(f"[LAB SAVE] Authenticated user: {request.user}")
+
+    if not report_id:
+        print("[LAB SAVE] Report found: NO (Missing report_id)")
+        return Response({'error': 'Lab report ID is missing. Please upload the report again.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    report = None
     try:
         report = LabReport.objects.get(id=report_id, user=request.user)
     except LabReport.DoesNotExist:
-        return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+        # Fallback: check if report_id was a Prescription ID created during upload_prescription for a lab document
+        presc = Prescription.objects.filter(id=report_id, user=request.user).first()
+        if presc:
+            report = LabReport.objects.create(
+                user=request.user,
+                image=presc.image if presc.image else None,
+                raw_ocr_text=presc.raw_ocr_text or ''
+            )
+            print(f"[LAB SAVE] Created LabReport {report.id} from Prescription {presc.id}")
+        else:
+            print(f"[LAB SAVE] Report found: NO")
+            return Response({'error': 'Lab report not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Delete existing draft values if any
+    print(f"[LAB SAVE] Report found: YES")
+    print(f"[LAB SAVE] Saving lab values: {len(values_data)} item(s)")
+
+    # Delete existing draft values if any for this report
     LabValue.objects.filter(report=report).delete()
 
     created_values = []
     for item in values_data:
         test_name = item.get('test_name')
-        val = float(item.get('value', 0))
+        try:
+            val = float(item.get('value', 0))
+        except (ValueError, TypeError):
+            val = 0.0
         unit = item.get('unit', '')
 
         # Recalculate status against ReferenceRange
@@ -969,6 +1008,7 @@ def confirm_lab_report(request):
         created_values.append(lv)
 
     correlations = generate_report_correlations(request.user, created_values)
+    print(f"[LAB SAVE] Save successful: LabReport ID {report.id}")
 
     return Response({
         'message': 'Lab report saved successfully',

@@ -143,7 +143,7 @@ export default function AddPrescription() {
         // If classified as a lab/blood test, route to report tab state
         if (data.document_type === 'blood_test') {
           setActiveTab('report');
-          setLabReportId(data.prescription_id || data.report_id || 1);
+          setLabReportId(data.report_id || data.prescription_id);
           setExtractedLabValues(data.extracted_data || []);
           showToast('Blood test report detected! Displaying Lab Report Analysis.', 'info');
           return;

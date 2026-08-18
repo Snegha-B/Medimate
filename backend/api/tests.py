@@ -319,3 +319,25 @@ class ReminderSystemTests(APITestCase):
             self.assertIn('prescription_id', response.data)
             self.assertEqual(response.data['document_type'], 'prescription')
 
+    def test_confirm_lab_report_success(self):
+        """
+        Verify that confirming a lab report saves LabValue records and returns HTTP 201.
+        """
+        from core.models import LabReport, LabValue
+        report = LabReport.objects.create(user=self.user, raw_ocr_text="TSH 3.081 uIU/ml")
+        
+        response = self.client.post('/api/reports/confirm/', {
+            'report_id': report.id,
+            'values': [
+                {'test_name': 'THYROID STIMULATING HORMONE (TSH)', 'value': 3.081, 'unit': 'µIU/ml', 'status': 'normal'}
+            ]
+        }, format='json')
+        
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['report_id'], report.id)
+        self.assertEqual(LabValue.objects.filter(report=report).count(), 1)
+        val = LabValue.objects.get(report=report)
+        self.assertEqual(val.test_name, 'THYROID STIMULATING HORMONE (TSH)')
+        self.assertEqual(val.value, 3.081)
+
+
