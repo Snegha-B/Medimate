@@ -7,7 +7,7 @@ when OCR fails or handwriting is detected.
 Key principles:
 - Conservative extraction: never guess ambiguous handwriting
 - Mark uncertain fields with needs_review=True
-- Graceful degradation: returns None if API unavailable
+- Comprehensive diagnostic logging
 """
 
 import logging
@@ -15,25 +15,30 @@ import os
 
 logger = logging.getLogger('medimate.vision')
 
+def _log(msg):
+    logger.info(msg)
+    print(f"[PIPELINE LOG] {msg}")
+
 
 def _get_gemini_client():
-    """Get a configured Gemini client. Returns None if API key not set."""
+    """Get a configured Gemini client. Returns (client, error_msg)."""
     try:
         from django.conf import settings
         api_key = getattr(settings, 'GEMINI_API_KEY', '') or os.environ.get('GEMINI_API_KEY', '')
         if not api_key or api_key == 'your-gemini-api-key':
-            logger.info("[VISION] GEMINI_API_KEY not configured — vision fallback unavailable")
-            return None
+            _log("[VISION] ERROR: GEMINI_API_KEY is missing or unconfigured on environment variables.")
+            return None, "GEMINI_API_KEY missing"
 
         from google import genai
         client = genai.Client(api_key=api_key)
-        return client
-    except ImportError:
-        logger.warning("[VISION] google-genai package not installed")
-        return None
+        return client, None
+    except ImportError as ie:
+        _log(f"[VISION] ERROR: google-genai package not installed: {ie}")
+        return None, "google-genai not installed"
     except Exception as e:
-        logger.exception(f"[VISION] Failed to initialize Gemini client: {e}")
-        return None
+        _log(f"[VISION] ERROR: Failed to initialize Gemini client: {e}")
+        logger.exception("Gemini client initialization failed:")
+        return None, str(e)
 
 
 MEDICAL_DOCUMENT_PROMPT = """You are a medical document analysis assistant. Analyze this medical document image carefully.
@@ -134,53 +139,64 @@ def analyze_document_image(image_path):
 
     Returns:
         dict with vision analysis results, or None if unavailable/failed.
-        {
-            'document_type': str,
-            'overall_confidence': float,
-            'needs_review': bool,
-            'extracted_data': dict,
-            'notes': str,
-            'raw_text': str (extracted text from vision)
-        }
     """
-    client = _get_gemini_client()
+    _log("[VISION] Vision request started")
+    _log("[VISION] Provider/model: google-genai / gemini-2.0-flash")
+
+    client, err = _get_gemini_client()
     if client is None:
+        _log(f"[VISION] Response status: FAILED ({err})")
+        _log("[VISION] Response contained usable content: NO")
+        return None
+
+    if not image_path or not os.path.exists(image_path):
+        _log("[VISION] Image attached: NO")
+        _log("[VISION] Response status: FAILED (file not found)")
+        _log("[VISION] Response contained usable content: NO")
         return None
 
     try:
         from google.genai import types
         import json
+        from PIL import Image
 
-        logger.info(f"[VISION] Analyzing document image: {os.path.basename(image_path)}")
-
-        # Upload the image file
-        with open(image_path, 'rb') as f:
-            image_bytes = f.read()
-
-        # Determine MIME type
+        _log("[VISION] Image attached: YES")
         ext = os.path.splitext(image_path)[1].lower()
-        mime_map = {
-            '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-            '.png': 'image/png', '.bmp': 'image/bmp',
-            '.webp': 'image/webp', '.pdf': 'application/pdf',
-        }
-        mime_type = mime_map.get(ext, 'image/jpeg')
 
-        # For PDFs, we need to convert to image first
+        # Handle PDF vs Image
+        image_bytes = None
+        mime_type = 'image/jpeg'
+        dimensions = "unknown"
+
         if ext == '.pdf':
+            import pymupdf
+            doc = pymupdf.open(image_path)
+            page = doc[0]
+            pix = page.get_pixmap(dpi=300)
+            image_bytes = pix.tobytes("png")
+            mime_type = 'image/png'
+            dimensions = f"{pix.width}x{pix.height}"
+            _log("[VISION] PDF converted to high-res PNG for vision analysis")
+        else:
+            with open(image_path, 'rb') as f:
+                image_bytes = f.read()
+            mime_map = {
+                '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                '.png': 'image/png', '.bmp': 'image/bmp',
+                '.webp': 'image/webp',
+            }
+            mime_type = mime_map.get(ext, 'image/jpeg')
             try:
-                import pymupdf
-                doc = pymupdf.open(image_path)
-                page = doc[0]
-                pix = page.get_pixmap(dpi=300)
-                image_bytes = pix.tobytes("png")
-                mime_type = 'image/png'
-                logger.info("[VISION] Converted PDF page 1 to PNG for vision analysis")
-            except Exception as e:
-                logger.warning(f"[VISION] PDF to image conversion failed: {e}")
-                return None
+                pil_img = Image.open(image_path)
+                dimensions = f"{pil_img.size[0]}x{pil_img.size[1]}"
+            except Exception:
+                pass
 
-        # Call Gemini
+        _log(f"[VISION] Image format: {mime_type}")
+        _log(f"[VISION] Image dimensions: {dimensions}")
+        _log(f"[VISION] Image bytes/size: {len(image_bytes)} bytes")
+
+        # Call Gemini Vision API
         response = client.models.generate_content(
             model='gemini-2.0-flash',
             contents=[
@@ -189,11 +205,16 @@ def analyze_document_image(image_path):
             ],
         )
 
-        response_text = response.text.strip()
-        logger.info(f"[VISION] Gemini response received: {len(response_text)} chars")
+        _log("[VISION] Response received: YES")
+        response_text = response.text.strip() if response.text else ''
+        _log(f"[VISION] Response length: {len(response_text)} chars")
 
-        # Parse the JSON response
-        # Handle markdown code blocks
+        if not response_text:
+            _log("[VISION] Response status: HTTP 200 (empty response)")
+            _log("[VISION] Response contained usable content: NO")
+            return None
+
+        # Clean markdown wrappers if present
         if response_text.startswith('```'):
             lines = response_text.split('\n')
             json_lines = []
@@ -208,27 +229,29 @@ def analyze_document_image(image_path):
 
         result = json.loads(response_text)
 
-        logger.info(f"[VISION] Document type detected: {result.get('document_type', 'unknown')}")
-        logger.info(f"[VISION] Overall confidence: {result.get('overall_confidence', 0)}")
-        logger.info(f"[VISION] Needs review: {result.get('needs_review', True)}")
+        doc_type = result.get('document_type', 'unknown')
+        conf = result.get('overall_confidence', 0.0)
+        _log(f"[VISION] Response status: HTTP 200 OK")
+        _log(f"[VISION] Response contained usable content: YES (type={doc_type}, confidence={conf})")
 
         return result
 
     except json.JSONDecodeError as e:
-        logger.warning(f"[VISION] Failed to parse Gemini JSON response: {e}")
-        logger.debug(f"[VISION] Raw response: {response_text[:500]}")
+        _log(f"[VISION] ERROR: Failed to parse Gemini JSON response: {e}")
+        logger.exception("Gemini JSON parse error:")
+        _log("[VISION] Response contained usable content: NO")
         return None
     except Exception as e:
-        logger.exception(f"[VISION] Vision analysis failed: {e}")
+        _log(f"[VISION] ERROR: Vision request exception: {e}")
+        logger.exception("Vision request exception:")
+        _log("[VISION] Response status: FAILED")
+        _log("[VISION] Response contained usable content: NO")
         return None
 
 
 def vision_result_to_prescription_data(vision_result):
     """
-    Convert vision analysis result to the standard MediMate prescription format
-    compatible with the existing confirm_prescription flow.
-
-    Returns dict matching parse_prescription_text output format.
+    Convert vision analysis result to standard MediMate format.
     """
     if not vision_result or not isinstance(vision_result, dict):
         return None
@@ -242,21 +265,15 @@ def vision_result_to_prescription_data(vision_result):
         if not medicines:
             return None
 
-        # Use the first medicine for the primary extraction
-        # (the existing flow handles one medicine at a time)
         med = medicines[0]
         confidence_score = med.get('confidence', overall_conf) * 100
-
-        # Map frequency to standard format
         frequency = med.get('frequency', '')
 
-        # Determine timing
         morning = med.get('morning', False)
         afternoon = med.get('afternoon', False)
         evening = med.get('evening', False)
         night = med.get('night', False)
 
-        # If no timing specified, derive from frequency
         if not any([morning, afternoon, evening, night]):
             freq_lower = (frequency or '').lower()
             if '1-0-1' in freq_lower or 'twice' in freq_lower:
@@ -268,9 +285,8 @@ def vision_result_to_prescription_data(vision_result):
             elif '0-0-1' in freq_lower:
                 night = True
             else:
-                morning = True  # Safe default
+                morning = True
 
-        # Calculate total tablets
         try:
             duration_days = int(med.get('duration', '7') or '7')
         except (ValueError, TypeError):
@@ -308,7 +324,6 @@ def vision_result_to_prescription_data(vision_result):
         if not tests:
             return None
 
-        # Convert to the lab report format (list of dicts)
         lab_values = []
         for test in tests:
             lab_values.append({

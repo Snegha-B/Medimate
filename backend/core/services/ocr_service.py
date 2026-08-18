@@ -5,8 +5,8 @@ Pipeline:
 1. Detect input type (PDF / image)
 2. For PDFs: extract digital text first, then render to 300 DPI images if needed
 3. Advanced image preprocessing (orientation, deskew, adaptive threshold, noise reduction)
-4. Multi-attempt OCR with different Tesseract configs
-5. Returns structured result with handwriting detection flag for vision fallback
+4. Multi-attempt OCR with raw vs preprocessed comparison
+5. Returns structured result
 """
 
 import pytesseract
@@ -20,6 +20,19 @@ logger = logging.getLogger('medimate.ocr')
 def _log(msg):
     logger.info(msg)
     print(f"[PIPELINE LOG] {msg}")
+
+
+def check_tesseract_availability():
+    """Verify that Tesseract executable is installed and reachable by pytesseract."""
+    try:
+        ver = pytesseract.get_tesseract_version()
+        _log(f"[OCR] Tesseract executable found. Version: {ver}")
+        return True
+    except Exception as e:
+        _log(f"[OCR ERROR] Tesseract executable not found or failed: {e}")
+        logger.exception("Tesseract executable check failed:")
+        return False
+
 
 # ============================================================
 # IMAGE PREPROCESSING
@@ -67,7 +80,6 @@ def _deskew(image):
     try:
         import cv2
         img_array = np.array(image)
-        # Invert for contour detection (text = white on black)
         if len(img_array.shape) == 2:
             binary = cv2.threshold(img_array, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
         else:
@@ -84,7 +96,6 @@ def _deskew(image):
         else:
             angle = -angle
 
-        # Only correct small skew (< 15 degrees)
         if abs(angle) > 15 or abs(angle) < 0.3:
             return image
 
@@ -106,7 +117,6 @@ def preprocess_standard(image):
     """
     Standard preprocessing: grayscale, upscale, autocontrast,
     adaptive threshold, light noise reduction.
-    Good for printed text with reasonable quality.
     """
     try:
         image = _upscale_if_small(image)
@@ -114,7 +124,6 @@ def preprocess_standard(image):
         gray = _deskew(gray)
         gray = ImageOps.autocontrast(gray)
 
-        # Adaptive thresholding via OpenCV
         try:
             import cv2
             img_array = np.array(gray)
@@ -123,11 +132,9 @@ def preprocess_standard(image):
                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                 cv2.THRESH_BINARY, 31, 12
             )
-            # Light median blur for noise
             denoised = cv2.medianBlur(adaptive, 3)
             return Image.fromarray(denoised)
         except ImportError:
-            # Fallback without OpenCV
             enhancer = ImageEnhance.Contrast(gray)
             return enhancer.enhance(1.5)
     except Exception as e:
@@ -137,26 +144,21 @@ def preprocess_standard(image):
 
 def preprocess_aggressive(image):
     """
-    Aggressive preprocessing for difficult documents:
-    stronger contrast, sharpen, heavier thresholding.
-    Good for low-quality photos, uneven lighting, faded text.
+    Aggressive preprocessing for difficult documents.
     """
     try:
         image = _upscale_if_small(image, target_width=2500)
         gray = image.convert('L')
         gray = _deskew(gray)
 
-        # Sharpen first
         gray = gray.filter(ImageFilter.SHARPEN)
         gray = ImageOps.autocontrast(gray, cutoff=2)
 
         try:
             import cv2
             img_array = np.array(gray)
-            # CLAHE for local contrast enhancement (handles uneven lighting)
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(img_array)
-            # Stronger adaptive threshold
             adaptive = cv2.adaptiveThreshold(
                 enhanced, 255,
                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -177,8 +179,6 @@ def preprocess_aggressive(image):
 def preprocess_minimal(image):
     """
     Minimal preprocessing: just grayscale, upscale, autocontrast.
-    Used as a third attempt — sometimes heavy processing hurts OCR.
-    Also preserves handwriting better.
     """
     try:
         image = _upscale_if_small(image)
@@ -219,9 +219,7 @@ def _clean_ocr_text(text):
     if not text:
         return ''
     import re
-    # Collapse multiple blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
-    # Remove lines that are only special characters
     lines = text.split('\n')
     cleaned = [l for l in lines if len(l.strip()) == 0 or any(c.isalnum() for c in l)]
     return '\n'.join(cleaned).strip()
@@ -230,8 +228,32 @@ def _clean_ocr_text(text):
 def multi_attempt_ocr(image):
     """
     Run OCR with multiple preprocessing + config combinations.
+    Includes raw image test vs preprocessed image test logging.
     Returns dict: { 'text': str, 'ocr_confidence': float, 'attempt': int, 'handwriting_detected': bool }
     """
+    check_tesseract_availability()
+
+    best_text = ''
+    best_confidence = 0.0
+    best_attempt = 0
+
+    # --- Test 1: Raw Unprocessed High-Res Image ---
+    try:
+        raw_text = pytesseract.image_to_string(image, config='--psm 3 --oem 3')
+        raw_text = _clean_ocr_text(raw_text)
+        raw_conf = get_ocr_confidence(image)
+        _log(f"[OCR TEST] Raw image OCR text length: {len(raw_text)}")
+        _log(f"[OCR TEST] Raw image OCR confidence: {raw_conf}%")
+        
+        if len(raw_text) > 0:
+            best_text = raw_text
+            best_confidence = raw_conf
+            best_attempt = 0
+    except Exception as e:
+        _log(f"[OCR ERROR] Raw image OCR attempt failed: {e}")
+        logger.exception("Raw image OCR error:")
+
+    # --- Multi-attempt with Preprocessing ---
     attempts = [
         {
             'name': 'Standard (PSM 6)',
@@ -250,10 +272,6 @@ def multi_attempt_ocr(image):
         },
     ]
 
-    best_text = ''
-    best_confidence = 0.0
-    best_attempt = 0
-
     for i, attempt in enumerate(attempts, 1):
         try:
             processed = attempt['preprocess'](image.copy())
@@ -261,10 +279,9 @@ def multi_attempt_ocr(image):
             text = _clean_ocr_text(text)
             conf = get_ocr_confidence(processed)
 
-            _log(f"[OCR] Image OCR attempt {i} text length: {len(text)}")
-            _log(f"[OCR] Image OCR attempt {i} confidence: {conf}%")
+            _log(f"[OCR TEST] Preprocessed image OCR attempt {i} ({attempt['name']}) text length: {len(text)}")
+            _log(f"[OCR TEST] Preprocessed image OCR attempt {i} confidence: {conf}%")
 
-            # Keep the best result (prefer longer meaningful text)
             text_quality = len(text.strip()) * (conf / 100.0 if conf > 0 else 0.5)
             best_quality = len(best_text.strip()) * (best_confidence / 100.0 if best_confidence > 0 else 0.5)
 
@@ -273,27 +290,20 @@ def multi_attempt_ocr(image):
                 best_confidence = conf
                 best_attempt = i
 
-            # If we got good enough results, stop early
             if len(text.strip()) > 50 and conf > 60:
                 _log(f"[OCR] Attempt {i} sufficient — skipping remaining attempts")
                 break
 
         except Exception as e:
-            logger.warning(f"[OCR] Attempt {i} ({attempt['name']}) failed: {e}")
+            _log(f"[OCR ERROR] Preprocessed attempt {i} ({attempt['name']}) failed: {e}")
+            logger.exception(f"OCR attempt {i} failed:")
             continue
-
-    # Detect likely handwriting
-    handwriting_detected = False
-    if best_confidence < 35 and len(best_text.strip()) < 30:
-        # Low confidence + little text despite having content → likely handwriting
-        handwriting_detected = True
-        _log("[OCR] Low OCR confidence with minimal text — possible handwriting detected")
 
     return {
         'text': best_text,
         'ocr_confidence': best_confidence,
         'attempt': best_attempt,
-        'handwriting_detected': handwriting_detected,
+        'handwriting_detected': False,  # Do not force-flag low confidence as handwriting
     }
 
 
@@ -313,7 +323,6 @@ def extract_pdf_text(file_path):
         num_pages = min(len(doc), 10)
         _log(f"[OCR] Input type: PDF ({num_pages} page(s))")
 
-        # Stage 1: Try to extract selectable/digital text
         selectable_texts = []
         for i in range(num_pages):
             page = doc[i]
@@ -336,26 +345,21 @@ def extract_pdf_text(file_path):
         _log("[OCR] Direct extraction insufficient")
         _log("[OCR] Falling back to PDF page rendering")
 
-        # Stage 2: Render each page at 300 DPI and run multi-attempt OCR
         all_page_texts = []
         all_confidences = []
-        any_handwriting = False
 
         for i in range(num_pages):
             page = doc[i]
             _log(f"[OCR] Rendering page {i + 1} at high resolution (300 DPI)")
 
-            # Render at 300 DPI for quality
             pix = page.get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            _log(f"[OCR] Page {i + 1} image created successfully")
+            _log(f"[OCR] Page {i + 1} image created successfully (Dimensions: {img.size[0]}x{img.size[1]})")
 
             _log("[OCR] Image preprocessing completed")
             result = multi_attempt_ocr(img)
             all_page_texts.append(result['text'])
             all_confidences.append(result['ocr_confidence'])
-            if result['handwriting_detected']:
-                any_handwriting = True
 
         combined_text = "\n".join(all_page_texts).strip()
         avg_confidence = round(sum(all_confidences) / len(all_confidences), 1) if all_confidences else 0.0
@@ -366,12 +370,13 @@ def extract_pdf_text(file_path):
         return {
             'text': combined_text,
             'ocr_confidence': avg_confidence,
-            'handwriting_detected': any_handwriting,
+            'handwriting_detected': False,
             'method': 'pdf_ocr',
         }
 
     except Exception as e:
-        logger.exception(f"PDF extraction error: {e}")
+        _log(f"[OCR ERROR] PDF extraction exception: {e}")
+        logger.exception("PDF extraction error:")
 
     return {'text': '', 'ocr_confidence': 0.0, 'handwriting_detected': False, 'method': 'failed'}
 
@@ -386,7 +391,7 @@ def extract_text_from_file(file_path):
     Returns dict: { 'text': str, 'ocr_confidence': float, 'handwriting_detected': bool, 'method': str }
     """
     if not file_path or not os.path.exists(file_path):
-        logger.warning(f"[DOCUMENT] File not found: {file_path}")
+        _log(f"[OCR WARNING] File not found: {file_path}")
         return {'text': '', 'ocr_confidence': 0.0, 'handwriting_detected': False, 'method': 'missing'}
 
     ext = os.path.splitext(file_path)[1].lower()
@@ -396,13 +401,11 @@ def extract_text_from_file(file_path):
 
     _log(f"[OCR] Input type: Image ({ext})")
 
-    # Image file processing
     try:
         raw_image = Image.open(file_path)
 
-        # Fix camera orientation
         raw_image = _fix_orientation(raw_image)
-        _log("[OCR] Image preprocessing completed")
+        _log(f"[OCR] Image preprocessing completed (Dimensions: {raw_image.size[0]}x{raw_image.size[1]})")
 
         result = multi_attempt_ocr(raw_image)
 
@@ -413,7 +416,8 @@ def extract_text_from_file(file_path):
         return result
 
     except Exception as e:
-        logger.exception(f"Image OCR error: {e}")
+        _log(f"[OCR ERROR] Image OCR exception: {e}")
+        logger.exception("Image OCR error:")
         return {'text': '', 'ocr_confidence': 0.0, 'handwriting_detected': False, 'method': 'failed'}
 
 
