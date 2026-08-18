@@ -227,140 +227,156 @@ def upload_prescription(request):
     if ext not in ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'bmp']:
         return Response({'error': 'Invalid file format. Please upload a JPEG, PNG, or PDF file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # ── Step 2: Upload request received & File saved ──
-    print(f"[PIPELINE LOG] [OK] Step 2: Upload request received ({uploaded_file.name}, {uploaded_file.size} bytes)")
-    presc = Prescription(user=request.user)
-    if ext == 'pdf':
-        presc.pdf_file = uploaded_file
-    else:
-        presc.image = uploaded_file
-    presc.save()
-    
-    file_path = presc.pdf_file.path if presc.pdf_file else (presc.image.path if presc.image else '')
-    print(f"[PIPELINE LOG] [OK] Step 2: File saved to DB (Prescription ID: {presc.id}, Path: {file_path})")
-
-    # ── Step 3: OCR Execution ──
-    print(f"[PIPELINE LOG] [OK] Step 3: Tesseract started on file: {file_path}")
-    ocr_result = extract_text_from_image(file_path)
-
-    # Handle both old (string) and new (dict) return formats for safety
-    if isinstance(ocr_result, dict):
-        raw_text = ocr_result.get('text', '')
-        ocr_confidence = ocr_result.get('ocr_confidence', 0.0)
-    else:
-        raw_text = ocr_result or ''
-        ocr_confidence = 75.0  # Fallback
-
-    presc.ocr_confidence = ocr_confidence
-    print(f"[PIPELINE LOG] [OK] Step 3: OCR completed (OCR Confidence: {ocr_confidence}%)")
-    print(f"[PIPELINE LOG] [OK] Step 3: OCR extracted text (length: {len(raw_text)} chars)")
-
-    # ── Step 4: Print OCR Text ──
-    print("[PIPELINE LOG] [OK] Step 4: OCR Extracted Text:\n--------------------\n" + (raw_text or "[No text extracted]") + "\n--------------------")
-
-    # ── Stage 3: Validate OCR Quality ──
-    if not raw_text or len(raw_text.strip()) < 5:
-        presc.status = 'review_required'
-        presc.ocr_confidence = 0.0
-        presc.document_type = 'unknown'
+    try:
+        # ── Step 2: Upload request received & File saved ──
+        print(f"[PIPELINE LOG] [OK] Step 2: Upload request received ({uploaded_file.name}, {uploaded_file.size} bytes)")
+        presc = Prescription(user=request.user)
+        if ext == 'pdf':
+            presc.pdf_file = uploaded_file
+        else:
+            presc.image = uploaded_file
         presc.save()
-        parsed_data = parse_prescription_text("")
-        parsed_data["confidence_score"] = 60.0
-        print("[PIPELINE LOG] Step 4 Warning: Low OCR confidence/length. Returning review required response.")
+        
+        file_path = presc.pdf_file.path if presc.pdf_file else (presc.image.path if presc.image else '')
+        print(f"[PIPELINE LOG] [OK] Step 2: File saved to DB (Prescription ID: {presc.id}, Path: {file_path})")
+
+        # ── Step 3: OCR Execution ──
+        print(f"[PIPELINE LOG] [OK] Step 3: Tesseract started on file: {file_path}")
+        ocr_result = extract_text_from_image(file_path)
+
+        # Handle both old (string) and new (dict) return formats for safety
+        if isinstance(ocr_result, dict):
+            raw_text = ocr_result.get('text', '')
+            ocr_confidence = ocr_result.get('ocr_confidence', 0.0)
+        else:
+            raw_text = ocr_result or ''
+            ocr_confidence = 75.0  # Fallback
+
+        presc.ocr_confidence = ocr_confidence
+        print(f"[PIPELINE LOG] [OK] Step 3: OCR completed (OCR Confidence: {ocr_confidence}%)")
+        print(f"[PIPELINE LOG] [OK] Step 3: OCR extracted text (length: {len(raw_text)} chars)")
+
+        # ── Step 4: Print OCR Text ──
+        print("[PIPELINE LOG] [OK] Step 4: OCR Extracted Text:\n--------------------\n" + (raw_text or "[No text extracted]") + "\n--------------------")
+
+        # ── Stage 3: Validate OCR Quality ──
+        if not raw_text or len(raw_text.strip()) < 5:
+            presc.status = 'review_required'
+            presc.ocr_confidence = 0.0
+            presc.document_type = 'unknown'
+            presc.save()
+            parsed_data = parse_prescription_text("")
+            parsed_data["confidence_score"] = 0.0
+            print("[PIPELINE LOG] Step 4 Warning: Low OCR confidence/length. Returning review required response.")
+            return Response({
+                'prescription_id': presc.id,
+                'raw_text': "",
+                'extracted_data': parsed_data,
+                'confidence_score': 0.0,
+                'ocr_confidence': 0.0,
+                'document_type': 'unknown',
+                'document_label': 'Document type could not be reliably identified.',
+                'classification_confidence': 0.0,
+                'ai_summary': 'Unable to read this document clearly. Please upload a clearer image with the full report visible and good lighting.',
+                'message': 'Unable to read this document clearly. Please upload a clearer image with the full report visible and good lighting.'
+            })
+
+        if ocr_confidence < 40.0:
+            presc.status = 'review_required'
+            presc.raw_ocr_text = raw_text
+            presc.save()
+
+        # ── Stage 4: Document Type Classification ──
+        classification = classify_document(raw_text)
+        document_type = classification['document_type']
+        document_label = classification['document_label']
+        classification_confidence = classification['classification_confidence']
+
+        # If classification confidence is too low, treat as unknown
+        if classification_confidence < 30.0:
+            document_type = 'unknown'
+            document_label = 'Document type could not be reliably identified.'
+            print(f"[PIPELINE LOG] Step 4 Warning: Low classification confidence ({classification_confidence}%). Marking as unknown.")
+
+        presc.document_type = document_type
+        presc.classification_confidence = classification_confidence
+
+        # ── Step 5: AI Extraction ──
+        print(f"[PIPELINE LOG] [OK] Step 5: Passing OCR text to AI extractor (Document Type: {document_type})")
+        extracted_data = {}
+        ai_summary = ''
+
+        if document_type == 'prescription':
+            extracted_data = parse_prescription_text(raw_text)
+            ai_summary = generate_ai_summary('prescription', extracted_data, raw_text)
+
+        elif document_type == 'blood_test':
+            extracted_data = parse_lab_report_text(raw_text)
+            ai_summary = generate_ai_summary('blood_test', extracted_data, raw_text)
+
+        elif document_type in ('xray', 'mri', 'ct_scan', 'ultrasound'):
+            extracted_data = parse_imaging_report_text(raw_text)
+            ai_summary = generate_ai_summary(document_type, extracted_data, raw_text)
+
+        elif document_type == 'discharge_summary':
+            extracted_data = parse_discharge_summary_text(raw_text)
+            ai_summary = generate_ai_summary('discharge_summary', extracted_data, raw_text)
+
+        elif document_type == 'vaccination':
+            extracted_data = parse_vaccination_text(raw_text)
+            ai_summary = generate_ai_summary('vaccination', extracted_data, raw_text)
+
+        elif document_type == 'urine_test':
+            extracted_data = parse_blood_report_text(raw_text)
+            ai_summary = generate_ai_summary('urine_test', extracted_data, raw_text)
+
+        elif document_type == 'ecg':
+            extracted_data = parse_imaging_report_text(raw_text)
+            ai_summary = generate_ai_summary('ecg', extracted_data, raw_text)
+
+        else:
+            # Unknown type — do NOT default to parse_prescription_text
+            extracted_data = {}
+            ai_summary = 'Document type could not be reliably identified. Please try a different image or verify the document type.'
+
+        print(f"[PIPELINE LOG] [OK] Step 5: Extracted Medicines/Data:\n  {extracted_data}")
+
+        # Store results on the Prescription model
+        presc.raw_ocr_text = raw_text
+        presc.ai_summary = ai_summary
+
+        if isinstance(extracted_data, dict):
+            presc.doctor_instructions = extracted_data.get('doctor_instructions', '')
+            presc.doctor_notes = extracted_data.get('doctor_notes', '')
+            presc.confidence_score = extracted_data.get('confidence_score', 90.0)
+
+        if presc.status != 'review_required':
+            presc.status = 'processed'
+        presc.save()
+        
+        print("[PIPELINE LOG] [OK] Step 8: Returning JSON response to frontend")
         return Response({
             'prescription_id': presc.id,
-            'raw_text': "Notice: OCR confidence low. Please review and confirm extracted fields.",
-            'extracted_data': parsed_data,
-            'confidence_score': 60.0,
-            'ocr_confidence': 0.0,
-            'document_type': 'unknown',
-            'document_label': 'Unknown / Unrecognized',
-            'classification_confidence': 0.0,
-            'ai_summary': 'Could not read the document. Please try uploading a clearer image.',
-            'message': 'Low OCR confidence. Manual verification suggested.'
+            'raw_text': raw_text,
+            'extracted_data': extracted_data,
+            'confidence_score': presc.confidence_score,
+            'doctor_instructions': presc.doctor_instructions,
+            'doctor_notes': presc.doctor_notes,
+            'document_type': document_type,
+            'document_label': document_label,
+            'classification_confidence': classification_confidence,
+            'ocr_confidence': ocr_confidence,
+            'ai_summary': ai_summary,
+            'matched_keywords': classification.get('matched_keywords', []),
         })
-
-    if ocr_confidence < 40.0:
-        presc.status = 'review_required'
-        presc.raw_ocr_text = raw_text
-        presc.save()
-
-    # ── Stage 4: Document Type Classification ──
-    classification = classify_document(raw_text)
-    document_type = classification['document_type']
-    document_label = classification['document_label']
-    classification_confidence = classification['classification_confidence']
-
-    presc.document_type = document_type
-    presc.classification_confidence = classification_confidence
-
-    # ── Step 5: AI Extraction ──
-    print(f"[PIPELINE LOG] [OK] Step 5: Passing OCR text to AI extractor (Document Type: {document_type})")
-    extracted_data = {}
-    ai_summary = ''
-
-    if document_type == 'prescription':
-        extracted_data = parse_prescription_text(raw_text)
-        ai_summary = generate_ai_summary('prescription', extracted_data, raw_text)
-
-    elif document_type == 'blood_test':
-        extracted_data = parse_blood_report_text(raw_text)
-        ai_summary = generate_ai_summary('blood_test', extracted_data, raw_text)
-
-    elif document_type in ('xray', 'mri', 'ct_scan', 'ultrasound'):
-        extracted_data = parse_imaging_report_text(raw_text)
-        ai_summary = generate_ai_summary(document_type, extracted_data, raw_text)
-
-    elif document_type == 'discharge_summary':
-        extracted_data = parse_discharge_summary_text(raw_text)
-        ai_summary = generate_ai_summary('discharge_summary', extracted_data, raw_text)
-
-    elif document_type == 'vaccination':
-        extracted_data = parse_vaccination_text(raw_text)
-        ai_summary = generate_ai_summary('vaccination', extracted_data, raw_text)
-
-    elif document_type == 'urine_test':
-        extracted_data = parse_blood_report_text(raw_text)
-        ai_summary = generate_ai_summary('urine_test', extracted_data, raw_text)
-
-    elif document_type == 'ecg':
-        extracted_data = parse_imaging_report_text(raw_text)
-        ai_summary = generate_ai_summary('ecg', extracted_data, raw_text)
-
-    else:
-        extracted_data = parse_prescription_text(raw_text)
-        ai_summary = generate_ai_summary('unknown', extracted_data, raw_text)
-
-    print(f"[PIPELINE LOG] [OK] Step 5: Extracted Medicines/Data:\n  {extracted_data}")
-
-    # Store results on the Prescription model
-    presc.raw_ocr_text = raw_text
-    presc.ai_summary = ai_summary
-
-    if isinstance(extracted_data, dict):
-        presc.doctor_instructions = extracted_data.get('doctor_instructions', '')
-        presc.doctor_notes = extracted_data.get('doctor_notes', '')
-        presc.confidence_score = extracted_data.get('confidence_score', 90.0)
-
-    if presc.status != 'review_required':
-        presc.status = 'processed'
-    presc.save()
-    
-    print("[PIPELINE LOG] [OK] Step 8: Returning JSON response to frontend")
-    return Response({
-        'prescription_id': presc.id,
-        'raw_text': raw_text,
-        'extracted_data': extracted_data,
-        'confidence_score': presc.confidence_score,
-        'doctor_instructions': presc.doctor_instructions,
-        'doctor_notes': presc.doctor_notes,
-        'document_type': document_type,
-        'document_label': document_label,
-        'classification_confidence': classification_confidence,
-        'ocr_confidence': ocr_confidence,
-        'ai_summary': ai_summary,
-        'matched_keywords': classification.get('matched_keywords', []),
-    })
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Error in upload_prescription view during processing:")
+        return Response({
+            'success': False,
+            'error': 'Prescription processing failed'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -486,9 +502,20 @@ def today_schedule(request):
     todays_schedules = []
     for med in medications:
         days_diff = (today - med.start_date).days
-        if 0 <= days_diff < med.duration_days:
-            schedules = med.schedules.filter(day_offset=days_diff)
-            todays_schedules.extend(schedules)
+        if days_diff >= 0:
+            # If within duration, try exact day_offset
+            if days_diff < med.duration_days:
+                schedules = med.schedules.filter(day_offset=days_diff)
+                if schedules.exists():
+                    todays_schedules.extend(schedules)
+                else:
+                    # Fallback for manual/daily medicines that only have day_offset=0
+                    if med.frequency and 'daily' in med.frequency.lower():
+                        todays_schedules.extend(med.schedules.filter(day_offset=0))
+            else:
+                # If past duration, but it's a recurring daily medicine, keep going
+                if med.frequency and 'daily' in med.frequency.lower():
+                    todays_schedules.extend(med.schedules.filter(day_offset=0))
             
     serializer = ScheduleSerializer(todays_schedules, many=True)
 
@@ -563,6 +590,9 @@ def log_dose(request):
         
     existing_log = DoseLog.objects.filter(schedule=schedule).first()
     prev_status = existing_log.status if existing_log else None
+
+    if prev_status in ['taken', 'skipped']:
+        return Response({'error': f'Dose has already been marked as {prev_status}. Cannot change status.'}, status=status.HTTP_400_BAD_REQUEST)
 
     snooze_time = None
     if status_val == 'snoozed':
@@ -774,25 +804,39 @@ def upload_lab_report(request):
     if ext not in ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'bmp']:
         return Response({'error': 'Invalid file format. Please upload a JPEG, PNG, or PDF file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    report = LabReport.objects.create(user=request.user, image=uploaded_file)
-
-    raw_text = ""
     try:
-        raw_text = extract_text_from_image(report.image.path if report.image else '')
-        if isinstance(raw_text, dict):
-            raw_text = raw_text.get('text', '')
-        report.raw_ocr_text = raw_text
-        report.save()
+        report = LabReport.objects.create(user=request.user, image=uploaded_file)
+
+        raw_text = ""
+        try:
+            raw_text = extract_text_from_image(report.image.path if report.image else '')
+            if isinstance(raw_text, dict):
+                raw_text = raw_text.get('text', '')
+            report.raw_ocr_text = raw_text
+            report.save()
+        except Exception as e:
+            print(f"Lab Report OCR Error: {e}")
+
+        extracted_values = parse_lab_report_text(raw_text)
+
+        # Classify the document to detect if user uploaded wrong type
+        classification = classify_document(raw_text)
+        document_type = classification['document_type']
+
+        return Response({
+            'report_id': report.id,
+            'raw_text': raw_text,
+            'extracted_values': extracted_values,
+            'document_type': document_type,
+            'document_label': classification['document_label'],
+            'classification_confidence': classification['classification_confidence'],
+        })
     except Exception as e:
-        print(f"Lab Report OCR Error: {e}")
-
-    extracted_values = parse_lab_report_text(raw_text)
-
-    return Response({
-        'report_id': report.id,
-        'raw_text': raw_text,
-        'extracted_values': extracted_values
-    })
+        import traceback
+        traceback.print_exc()
+        return Response({
+            'error': 'Unable to process this PDF. Please upload a clearer document or try another file.'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -1542,16 +1586,24 @@ def reminder_mark_taken(request, pk):
     except MedicineReminder.DoesNotExist:
         return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    if reminder.status in ['taken', 'skipped']:
+        return Response({'error': f'Cannot modify a dose that is already {reminder.status}'}, status=status.HTTP_400_BAD_REQUEST)
+
     reminder.status = 'taken'
     reminder.save()
 
     # Sync with DoseLog if schedule is present
     if reminder.schedule:
-        # Check if already logged
-        log, created = DoseLog.objects.update_or_create(
-            schedule=reminder.schedule,
-            defaults={'status': 'taken'}
-        )
+        # Find today's DoseLog or create a new one, avoiding overwrite of yesterday's if schedule is reused daily
+        today_date = timezone.now().date()
+        log = DoseLog.objects.filter(schedule=reminder.schedule, logged_at__date=today_date).first()
+        created = False
+        if log:
+            log.status = 'taken'
+            log.save()
+        else:
+            DoseLog.objects.create(schedule=reminder.schedule, status='taken')
+            created = True
         
         # Decrement medication count if not already marked taken
         med = reminder.schedule.medication
@@ -1575,6 +1627,9 @@ def reminder_snooze(request, pk):
     except MedicineReminder.DoesNotExist:
         return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    if reminder.status in ['taken', 'skipped']:
+        return Response({'error': f'Cannot snooze a dose that is already {reminder.status}'}, status=status.HTTP_400_BAD_REQUEST)
+
     try:
         snooze_mins = int(request.data.get('snooze_minutes', 10) or 10)
     except (ValueError, TypeError):
@@ -1594,10 +1649,18 @@ def reminder_snooze(request, pk):
 
     # Sync DoseLog
     if reminder.schedule:
-        DoseLog.objects.update_or_create(
-            schedule=reminder.schedule,
-            defaults={'status': 'snoozed', 'snoozed_until': snooze_time}
-        )
+        today_date = timezone.now().date()
+        log = DoseLog.objects.filter(schedule=reminder.schedule, logged_at__date=today_date).first()
+        if log:
+            log.status = 'snoozed'
+            log.snoozed_until = snooze_time
+            log.save()
+        else:
+            DoseLog.objects.create(
+                schedule=reminder.schedule,
+                status='snoozed',
+                snoozed_until=snooze_time
+            )
 
     return Response({
         'message': f'Reminder snoozed for {snooze_mins} minutes',
@@ -1615,16 +1678,35 @@ def reminder_mark_skipped(request, pk):
     except MedicineReminder.DoesNotExist:
         return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    if reminder.status in ['taken', 'skipped']:
+        return Response({'error': f'Cannot modify a dose that is already {reminder.status}'}, status=status.HTTP_400_BAD_REQUEST)
+
     skip_reason = request.data.get('skip_reason', '')
     reminder.status = 'skipped'
     reminder.save()
 
     # Sync with DoseLog if schedule is present
     if reminder.schedule:
-        DoseLog.objects.update_or_create(
-            schedule=reminder.schedule,
-            defaults={'status': 'skipped', 'skip_reason': skip_reason}
-        )
+        today_date = timezone.now().date()
+        log = DoseLog.objects.filter(schedule=reminder.schedule, logged_at__date=today_date).first()
+        if log:
+            log.status = 'skipped'
+            log.skip_reason = skip_reason
+            log.save()
+        else:
+            DoseLog.objects.create(
+                schedule=reminder.schedule,
+                status='skipped',
+                skip_reason=skip_reason
+            )
+
+    # Phase 6: Ensure skipped doses appear in Notifications -> Misses
+    Notification.objects.create(
+        user=request.user,
+        title=f"Missed Medicine: {reminder.medicine_name}",
+        message=f"You skipped your {reminder.medicine_name} dose scheduled for {reminder.reminder_time.strftime('%I:%M %p')}.",
+        notification_type="missed_dose"
+    )
 
     return Response({
         'message': 'Reminder marked as skipped successfully',

@@ -12,3 +12,4 @@ djangorestframework==3.17.1
 pytesseract==0.3.13
 rapidfuzz==3.14.1
 pytz==2026.3.post1
+pymupdf==1.28.2

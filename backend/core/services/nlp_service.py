@@ -37,9 +37,9 @@ def parse_prescription_text(text):
         "name": "",
         "dosage": "",
         "frequency": "",
-        "duration": "7",
+        "duration": "",
         "before_food": False,
-        "after_food": True,
+        "after_food": False,
         "morning": False,
         "afternoon": False,
         "evening": False,
@@ -81,8 +81,8 @@ def parse_prescription_text(text):
             parsed_data["name"] = name_match.group(1).capitalize()
             parsed_data["confidence_score"] = 70.0
         else:
-            parsed_data["name"] = "Unspecified Medicine"
-            parsed_data["confidence_score"] = 50.0
+            parsed_data["name"] = ""
+            parsed_data["confidence_score"] = 0.0
 
     # 2. Extract Dosage
     dosage_pattern = r'\b(\d+\s*(?:mg|ml|g|mcg|tablets?))\b'
@@ -118,9 +118,11 @@ def parse_prescription_text(text):
         parsed_data["after_food"] = True
 
     # 6. Slot Timing Flags (Exact Reminder Generation)
-    freq_str = parsed_data["frequency"].lower()
+    freq_str = parsed_data["frequency"].lower() if parsed_data["frequency"] else ""
     
-    if freq_str == '1-0-0':
+    if not freq_str:
+        pass
+    elif freq_str == '1-0-0':
         parsed_data["morning"] = True
         parsed_data["afternoon"] = False
         parsed_data["evening"] = False
@@ -167,8 +169,9 @@ def parse_prescription_text(text):
             parsed_data["night"] = True
 
         if not any([parsed_data["morning"], parsed_data["afternoon"], parsed_data["evening"], parsed_data["night"]]):
-            # Default to morning only if unspecified
-            parsed_data["morning"] = True
+            # Default to morning only if unspecified and a medicine name was found
+            if parsed_data["name"] and parsed_data["name"] != "Unspecified Medicine":
+                parsed_data["morning"] = True
 
     # 7. Doctor Instructions & Notes
     if 'doctor note' in text_lower or 'note:' in text_lower or 'instruction' in text_lower:

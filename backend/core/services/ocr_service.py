@@ -1,8 +1,6 @@
 import pytesseract
 from PIL import Image, ImageEnhance, ImageOps
 import os
-import re
-import zlib
 
 def preprocess_image(image):
     """
@@ -49,43 +47,48 @@ def get_ocr_confidence(file_path_or_image):
 
 def extract_pdf_text(file_path):
     """
-    Extract readable text from PDF streams using standard library zlib decompression
-    and regex stream text parsing.
+    Extract readable text from PDF streams using PyMuPDF (fitz) or fallback to
+    rendering PDF pages to images and running pytesseract OCR.
     """
-    text_chunks = []
+    import pymupdf
     try:
-        with open(file_path, 'rb') as f:
-            content = f.read()
-
-        # Find FlateDecode streams
-        stream_matches = re.findall(b'stream\r?\n(.*?)\r?\nendstream', content, re.DOTALL)
-        for raw_stream in stream_matches:
-            try:
-                decompressed = zlib.decompress(raw_stream)
-                # Find PDF text objects (between BT and ET, or (text) Tj)
-                tj_matches = re.findall(r'\((.*?)\)\s*Tj', decompressed.decode('latin-1', errors='ignore'))
-                if tj_matches:
-                    text_chunks.extend(tj_matches)
-                else:
-                    # Generic string extraction from stream
-                    str_matches = re.findall(r'\(([^()]{3,})\)', decompressed.decode('latin-1', errors='ignore'))
-                    text_chunks.extend(str_matches)
-            except Exception:
-                continue
-
-        if not text_chunks:
-            # Fallback to direct raw text string matching
-            raw_str = content.decode('latin-1', errors='ignore')
-            text_chunks = re.findall(r'\(([^()]{4,})\)', raw_str)
-
-        clean_text = ' '.join(text_chunks)
-        # Clean control characters
-        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-        if len(clean_text) > 10:
-            return {'text': clean_text, 'ocr_confidence': 80.0}
+        doc = pymupdf.open(file_path)
+        num_pages = min(len(doc), 10)  # Sensible limit of 10 pages
+        
+        # 1. Try to extract selectable text first
+        selectable_texts = []
+        for i in range(num_pages):
+            page = doc[i]
+            page_text = page.get_text()
+            if page_text.strip():
+                selectable_texts.append(page_text)
+                
+        combined_selectable = "\n".join(selectable_texts).strip()
+        if len(combined_selectable) > 20:
+            return {'text': combined_selectable, 'ocr_confidence': 95.0}
+            
+        # 2. Scanned PDF fallback: render each page to an image and run OCR
+        page_texts = []
+        confidences = []
+        for i in range(num_pages):
+            page = doc[i]
+            # Render page to image (150 DPI)
+            pix = page.get_pixmap(dpi=150)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            processed_img = preprocess_image(img)
+            text = pytesseract.image_to_string(processed_img)
+            conf = get_ocr_confidence(processed_img)
+            
+            page_texts.append(text.strip())
+            confidences.append(conf)
+            
+        combined_text = "\n".join(page_texts).strip()
+        avg_confidence = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
+        return {'text': combined_text, 'ocr_confidence': avg_confidence}
+        
     except Exception as e:
-        print(f"PDF Parsing Exception: {e}")
-
+        print(f"PDF Extraction Exception: {e}")
+        
     return {'text': '', 'ocr_confidence': 0.0}
 
 def extract_text_from_file(file_path):
@@ -99,9 +102,7 @@ def extract_text_from_file(file_path):
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == '.pdf':
-        pdf_res = extract_pdf_text(file_path)
-        if pdf_res['text']:
-            return pdf_res
+        return extract_pdf_text(file_path)
 
     try:
         raw_image = Image.open(file_path)

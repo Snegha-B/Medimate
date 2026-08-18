@@ -105,10 +105,16 @@ class Command(BaseCommand):
                     reminder.save()
 
                     if reminder.schedule:
-                        DoseLog.objects.get_or_create(
-                            schedule=reminder.schedule,
-                            defaults={'status': 'missed'}
-                        )
+                        today_date = timezone.now().date()
+                        log = DoseLog.objects.filter(schedule=reminder.schedule, logged_at__date=today_date).first()
+                        if not log:
+                            DoseLog.objects.create(
+                                schedule=reminder.schedule,
+                                status='missed'
+                            )
+                        elif log.status == 'pending':
+                            log.status = 'missed'
+                            log.save()
                     self.stdout.write(self.style.WARNING(
                         f"[process_reminders] Reminder {reminder.id} "
                         f"({reminder.medicine_name}) marked as MISSED."

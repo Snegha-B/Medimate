@@ -203,3 +203,119 @@ class ReminderSystemTests(APITestCase):
         self.assertTrue(Medication.objects.filter(name="Persistent Med").exists())
         self.assertTrue(Schedule.objects.filter(medication__name="Persistent Med").exists())
         self.assertTrue(DoseLog.objects.filter(schedule__medication__name="Persistent Med", status='taken').exists())
+
+    def test_taken_dose_cannot_be_snoozed_or_skipped(self):
+        """
+        Verify that a reminder marked as Taken rejects subsequent Skip or Snooze actions.
+        """
+        from core.models import MedicineReminder
+        reminder = MedicineReminder.objects.create(
+            user=self.user,
+            medicine_name="Test Med",
+            reminder_date=timezone.now().date(),
+            reminder_time=datetime.time(10, 0),
+            status="taken"
+        )
+        # Try to skip
+        response = self.client.post(f'/api/reminders/{reminder.id}/skip/', {})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cannot modify", response.data['error'])
+
+        # Try to snooze
+        response = self.client.post(f'/api/reminders/{reminder.id}/snooze/', {'snooze_minutes': 10})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cannot snooze", response.data['error'])
+
+    def test_skipped_dose_cannot_be_taken_or_snoozed(self):
+        """
+        Verify that a reminder marked as Skipped rejects subsequent Taken or Snooze actions.
+        """
+        from core.models import MedicineReminder
+        reminder = MedicineReminder.objects.create(
+            user=self.user,
+            medicine_name="Test Med",
+            reminder_date=timezone.now().date(),
+            reminder_time=datetime.time(10, 0),
+            status="skipped"
+        )
+        # Try to mark taken
+        response = self.client.post(f'/api/reminders/{reminder.id}/taken/', {})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cannot modify", response.data['error'])
+
+        # Try to snooze
+        response = self.client.post(f'/api/reminders/{reminder.id}/snooze/', {'snooze_minutes': 10})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cannot snooze", response.data['error'])
+
+    def test_taken_skipped_reminders_not_notified(self):
+        """
+        Verify that taken or skipped reminders are ignored by the notification system.
+        """
+        from core.models import MedicineReminder
+        from django.core.management import call_command
+        
+        r1 = MedicineReminder.objects.create(
+            user=self.user,
+            medicine_name="Taken Med",
+            reminder_date=timezone.now().date(),
+            reminder_time=datetime.time(1, 0),
+            status="taken"
+        )
+        r2 = MedicineReminder.objects.create(
+            user=self.user,
+            medicine_name="Skipped Med",
+            reminder_date=timezone.now().date(),
+            reminder_time=datetime.time(1, 0),
+            status="skipped"
+        )
+        call_command('send_push_reminders')
+        
+        r1.refresh_from_db()
+        r2.refresh_from_db()
+        self.assertFalse(r1.notification_sent)
+        self.assertFalse(r2.notification_sent)
+
+    def test_upload_prescription_success(self):
+        """
+        Verify that uploading a prescription does not return HTTP 500 when AI extractor extracts medicine.
+        """
+        from unittest.mock import patch
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        # Mock classify_document and parse_prescription_text
+        with patch('api.views.classify_document') as mock_classify, \
+             patch('api.views.parse_prescription_text') as mock_parse, \
+             patch('api.views.extract_text_from_image') as mock_ocr:
+
+            mock_ocr.return_value = "CITY GENERAL HOSPITAL Dolo 650mg once daily for 7 days before food"
+            mock_classify.return_value = {
+                'document_type': 'prescription',
+                'document_label': 'Doctor Prescription',
+                'classification_confidence': 95.0,
+                'matched_keywords': ['prescription']
+            }
+            mock_parse.return_value = {
+                'name': 'Unspecified Medicine',
+                'dosage': '9g',
+                'frequency': '0d',
+                'duration': '7',
+                'before_food': True,
+                'after_food': False,
+                'morning': True,
+                'afternoon': False,
+                'evening': False,
+                'night': False,
+                'category': 'General',
+                'total_tablets': 7,
+                'doctor_instructions': '',
+                'doctor_notes': '',
+                'confidence_score': 50.0
+            }
+
+            fake_pdf = SimpleUploadedFile("prescription.pdf", b"fake content", content_type="application/pdf")
+            response = self.client.post('/api/prescriptions/upload/', {'pdf_file': fake_pdf})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('prescription_id', response.data)
+            self.assertEqual(response.data['document_type'], 'prescription')
+

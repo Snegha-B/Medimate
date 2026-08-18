@@ -35,13 +35,17 @@ class Command(BaseCommand):
             )
 
             for med in medications:
-                end_date = med.start_date + datetime.timedelta(days=med.duration_days)
-                if local_date >= end_date:
-                    continue # medication completed
-
                 # Check if it has schedules for this day
                 days_diff = (local_date - med.start_date).days
-                schedules = med.schedules.filter(day_offset=days_diff)
+                schedules = med.schedules.none()
+                if days_diff >= 0:
+                    if days_diff < med.duration_days:
+                        schedules = med.schedules.filter(day_offset=days_diff)
+                        if not schedules.exists() and med.frequency and 'daily' in med.frequency.lower():
+                            schedules = med.schedules.filter(day_offset=0)
+                    else:
+                        if med.frequency and 'daily' in med.frequency.lower():
+                            schedules = med.schedules.filter(day_offset=0)
 
                 for sch in schedules:
                     # Create the MedicineReminder

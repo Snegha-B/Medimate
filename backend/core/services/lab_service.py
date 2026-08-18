@@ -50,7 +50,7 @@ def evaluate_value_status(min_val, max_val, numeric_val):
 def parse_lab_report_text(text):
     """
     Parses OCR text of lab reports, fuzzy matching against ReferenceRange test names
-    and extracting numerical values.
+    and extracting numerical values. Returns reference range info with each result.
     """
     seed_reference_ranges()
     ref_objs = list(ReferenceRange.objects.all())
@@ -83,11 +83,19 @@ def parse_lab_report_text(text):
             val_float = float(numbers[0])
             status_val = evaluate_value_status(ref.min_normal, ref.max_normal, val_float) if ref else 'normal'
 
+            # Build reference range display string from DB data
+            ref_range_text = ''
+            if ref and ref.min_normal is not None and ref.max_normal is not None:
+                ref_range_text = f"{ref.min_normal}–{ref.max_normal} {ref.unit}" if ref.unit else f"{ref.min_normal}–{ref.max_normal}"
+
             extracted_values.append({
                 'test_name': matched_name,
                 'value': val_float,
                 'unit': ref.unit if ref else '',
-                'status': status_val
+                'status': status_val,
+                'reference_range': ref_range_text or 'Not clearly detected',
+                'min_normal': ref.min_normal if ref else None,
+                'max_normal': ref.max_normal if ref else None,
             })
 
     return extracted_values
