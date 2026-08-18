@@ -163,7 +163,7 @@ def analyze_document_image(image_path):
     """
     _log("[RESOURCE] Vision fallback: YES")
     _log("[VISION] Vision request started")
-    _log("[VISION] Provider/model: google-genai / gemini-2.0-flash")
+    _log("[VISION] Provider/model: google-genai / gemini-3.5-flash")
 
     client, err = _get_gemini_client()
     if client is None:
@@ -210,7 +210,7 @@ def analyze_document_image(image_path):
 
         # Call Gemini Vision API
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-3.5-flash',
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'),
                 MEDICAL_DOCUMENT_PROMPT,
