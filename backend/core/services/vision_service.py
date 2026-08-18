@@ -15,7 +15,6 @@ import logging
 import os
 import io
 import gc
-import json
 from PIL import Image
 
 logger = logging.getLogger('medimate.vision')
