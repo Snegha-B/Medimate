@@ -97,6 +97,18 @@ export default function AddPrescription() {
     console.log(`  File Type: ${selectedFile.type || ext}`);
 
     // 3. Automatic Upload Pipeline with Explicit Stages
+    // Clear previous analysis state before starting new upload
+    setExtractedData(null);
+    setExtractedLabValues(null);
+    setErrorMessage('');
+    setLowConfidenceWarning('');
+    setDocumentType('');
+    setDocumentLabel('');
+    setClassificationConfidence(0);
+    setOcrConfidence(0);
+    setAiSummary('');
+    setConfidenceScore(0);
+
     setLoading(true);
     setUploadProgress(15);
 
@@ -128,6 +140,15 @@ export default function AddPrescription() {
         const data = await api.post('/api/prescriptions/upload/', formData);
         setUploadProgress(100);
 
+        // If classified as a lab/blood test, route to report tab state
+        if (data.document_type === 'blood_test') {
+          setActiveTab('report');
+          setLabReportId(data.prescription_id || data.report_id || 1);
+          setExtractedLabValues(data.extracted_data || []);
+          showToast('Blood test report detected! Displaying Lab Report Analysis.', 'info');
+          return;
+        }
+
         setPrescriptionId(data.prescription_id);
         setConfidenceScore(data.confidence_score || 90.0);
         setDoctorInstructions(data.doctor_instructions || '');
@@ -150,6 +171,19 @@ export default function AddPrescription() {
       } else {
         const data = await api.post('/api/reports/upload/', formData);
         setUploadProgress(100);
+
+        // Check if report was mistakenly classified as prescription
+        if (data.document_type === 'prescription') {
+          setActiveTab('prescription');
+          setPrescriptionId(data.report_id);
+          setConfidenceScore(90.0);
+          setDocumentType('prescription');
+          setDocumentLabel('Doctor Prescription');
+          setExtractedData(data.extracted_values || {});
+          showToast('Prescription detected! Displaying Prescription Summary.', 'info');
+          return;
+        }
+
         setLabReportId(data.report_id);
         setExtractedLabValues(data.extracted_values || []);
         showToast('Lab report analyzed successfully!', 'success');
@@ -209,6 +243,19 @@ export default function AddPrescription() {
     setLowConfidenceWarning('');
     setExtractedData(null);
     setExtractedLabValues(null);
+    setPrescriptionId(null);
+    setLabReportId(null);
+    setConfidenceScore(0);
+    setDoctorInstructions('');
+    setDoctorNotes('');
+    setDocumentType('');
+    setDocumentLabel('');
+    setClassificationConfidence(0);
+    setOcrConfidence(0);
+    setAiSummary('');
+    setUploadProgress(0);
+    setProcessingStage('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   // ── Confidence Bar Component ──
@@ -299,6 +346,49 @@ export default function AddPrescription() {
               </span>
             );
           })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── OCR Failure / Unrecognized Document Screen ──
+  if (extractedData && documentType === 'unknown') {
+    const isOcrFail = ocrConfidence === 0;
+    return (
+      <div className="page-container" style={{ maxWidth: '640px', textAlign: 'center', padding: '40px 20px' }}>
+        <div style={{
+          width: '72px', height: '72px', borderRadius: '50%',
+          background: 'var(--danger-light)', display: 'inline-flex',
+          alignItems: 'center', justifyContent: 'center', marginBottom: '24px', color: 'var(--danger-color)'
+        }}>
+          <AlertTriangle size={36} />
+        </div>
+        <h1 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--text-main)', marginBottom: '12px' }}>
+          {isOcrFail
+            ? 'Unable to read this document clearly.'
+            : 'Document type could not be reliably identified.'}
+        </h1>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '15px', lineHeight: '1.6', maxWidth: '480px', margin: '0 auto 32px' }}>
+          {isOcrFail
+            ? 'Please upload a clearer image with the full report visible and good lighting. Avoid blur, shadows, and glares.'
+            : 'MediMate could not confidently determine whether this is a prescription, lab report, or other medical document. Please ensure the full document is visible and try again.'}
+        </p>
+
+        {aiSummary && (
+          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', fontStyle: 'italic', marginBottom: '24px' }}>
+            {aiSummary}
+          </p>
+        )}
+
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ padding: '12px 24px' }}
+            onClick={clearSelectedFile}
+          >
+            Upload Different File
+          </button>
         </div>
       </div>
     );
@@ -400,6 +490,49 @@ export default function AddPrescription() {
             <span>{lowConfidenceWarning}</span>
           </div>
         )}
+
+        {/* ── Prescription Summary Structured Details (Requirement 3) ── */}
+        <div className="card" style={{ marginBottom: '20px', background: 'linear-gradient(to bottom right, #ffffff, var(--bg-subtle))', border: '1px solid var(--border-color)' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--primary-color)', borderBottom: '2px solid var(--border-color)', paddingBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <FileText size={20} />
+            <span>Prescription Summary</span>
+          </h3>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+            <div>
+              <strong style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', textTransform: 'uppercase', tracking: '0.05em' }}>Medicine:</strong>
+              <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)' }}>{extractedData.name || 'Not clearly detected'}</span>
+            </div>
+            <div>
+              <strong style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', textTransform: 'uppercase', tracking: '0.05em' }}>Dosage:</strong>
+              <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)' }}>{extractedData.dosage || 'Not clearly detected'}</span>
+            </div>
+            <div>
+              <strong style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', textTransform: 'uppercase', tracking: '0.05em' }}>Frequency:</strong>
+              <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)' }}>{extractedData.frequency || 'Not clearly detected'}</span>
+            </div>
+            <div>
+              <strong style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', textTransform: 'uppercase', tracking: '0.05em' }}>Food instruction:</strong>
+              <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)' }}>
+                {extractedData.before_food ? 'Before food' : (extractedData.after_food ? 'After food' : 'Not clearly detected')}
+              </span>
+            </div>
+            <div>
+              <strong style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', textTransform: 'uppercase', tracking: '0.05em' }}>Duration:</strong>
+              <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)' }}>{extractedData.duration ? `${extractedData.duration} days` : 'Not clearly detected'}</span>
+            </div>
+            <div>
+              <strong style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', textTransform: 'uppercase', tracking: '0.05em' }}>Instructions:</strong>
+              <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)' }}>{doctorInstructions || 'Not clearly detected'}</span>
+            </div>
+          </div>
+          {ocrConfidence < 40 && (
+            <div style={{ marginTop: '16px', color: 'var(--danger-color)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '600' }}>
+              <AlertTriangle size={16} />
+              <span>Note: Handwriting could not be reliably interpreted due to low OCR confidence. Please review the details below.</span>
+            </div>
+          )}
+        </div>
 
         <div className="card">
           <form onSubmit={handleConfirmPrescription}>
@@ -633,6 +766,71 @@ export default function AddPrescription() {
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: '4px 0 0' }}>Review blood metrics before saving to health record</p>
         </div>
 
+        {/* ── Lab Report Analysis Summary Table (Requirement 4) ── */}
+        <div className="card" style={{ marginBottom: '20px', padding: '20px' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--primary-color)', borderBottom: '2px solid var(--border-color)', paddingBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <FileText size={20} />
+            <span>Lab Report Summary</span>
+          </h3>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
+                  <th style={{ padding: '10px 8px', fontWeight: '700', color: 'var(--text-secondary)' }}>Test</th>
+                  <th style={{ padding: '10px 8px', fontWeight: '700', color: 'var(--text-secondary)' }}>Result</th>
+                  <th style={{ padding: '10px 8px', fontWeight: '700', color: 'var(--text-secondary)' }}>Reference Range</th>
+                  <th style={{ padding: '10px 8px', fontWeight: '700', color: 'var(--text-secondary)' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {extractedLabValues.map((lv, index) => {
+                  // Determine status styling and text description
+                  const isHigh = lv.status === 'high';
+                  const isLow = lv.status === 'low';
+                  const statusLabel = isHigh ? 'Above range' : (isLow ? 'Below range' : 'Normal');
+                  const statusStyle = isHigh ? { color: 'var(--danger-color)', fontWeight: '700' } : (isLow ? { color: 'var(--warning-color)', fontWeight: '700' } : { color: 'var(--success-color)', fontWeight: '600' });
+                  
+                  // Use reference range from backend data (not hardcoded)
+                  const refRangeText = lv.reference_range || 'Not clearly detected';
+
+                  return (
+                    <tr key={index} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <td style={{ padding: '10px 8px', fontWeight: '600', color: 'var(--text-main)' }}>{lv.test_name}</td>
+                      <td style={{ padding: '10px 8px', color: 'var(--text-main)' }}>{lv.value} {lv.unit}</td>
+                      <td style={{ padding: '10px 8px', color: 'var(--text-secondary)' }}>{refRangeText}</td>
+                      <td style={{ padding: '10px 8px', ...statusStyle }}>
+                        {statusLabel}
+                        {(isHigh || isLow) && (
+                          <div style={{ fontSize: '11px', fontWeight: 'normal', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            {isHigh ? 'Above the reference range shown on this report.' : 'Below the reference range shown on this report.'}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{
+            background: 'var(--warning-light)',
+            color: '#b45309',
+            padding: '12px 16px',
+            borderRadius: '12px',
+            marginTop: '20px',
+            fontSize: '13px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '8px',
+            lineHeight: '1.5'
+          }}>
+            <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+            <span><strong>Disclaimer:</strong> This analysis is for informational purposes and is not a medical diagnosis. Discuss abnormal or concerning results with a qualified healthcare professional.</span>
+          </div>
+        </div>
+
         <div className="card">
           <form onSubmit={handleConfirmLabReport}>
             {extractedLabValues.map((lv, index) => {
@@ -832,41 +1030,58 @@ export default function AddPrescription() {
           </div>
         )}
 
-        {/* Supported document types info */}
-        {activeTab === 'prescription' && (
-          <div style={{
-            display: 'flex', flexWrap: 'wrap', justifyContent: 'center',
-            gap: '6px', marginBottom: '24px'
-          }}>
-            {['Prescription', 'Blood Test', 'X-Ray', 'MRI', 'CT Scan', 'ECG', 'Ultrasound', 'Discharge Summary', 'Vaccination'].map(type => (
-              <span key={type} className="badge badge-blue" style={{ fontSize: '11px', padding: '3px 8px', opacity: 0.8 }}>
-                {type}
-              </span>
-            ))}
-          </div>
-        )}
+        {/* Communication section explaining automated analysis capabilities */}
+        <div style={{
+          background: 'var(--bg-subtle)',
+          borderRadius: '12px',
+          padding: '12px 16px',
+          marginBottom: '24px',
+          fontSize: '13px',
+          color: 'var(--text-secondary)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <Sparkles size={16} color="var(--primary-color)" />
+          <span>MediMate analyzes prescriptions and lab reports automatically using OCR & AI.</span>
+        </div>
 
-        {/* Button 1: Camera / Upload */}
+        {/* Button 1: Camera Capture */}
         <button
           type="button"
           className="btn btn-primary"
-          style={{ padding: '18px 24px', fontSize: '16px', marginBottom: '16px', width: '100%' }}
-          onClick={() => {
-            if (fileInputRef.current) {
-              fileInputRef.current.setAttribute('capture', 'environment');
-              fileInputRef.current.click();
+          style={{ padding: '18px 24px', fontSize: '16px', marginBottom: '16px', width: '100%', gap: '8px' }}
+          onClick={async () => {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+              try {
+                // Request camera permission
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                // Stop tracks immediately as we just wanted to verify/request permission
+                stream.getTracks().forEach(track => track.stop());
+                
+                // Trigger the hidden file input with capture="environment" to use system camera UI
+                if (fileInputRef.current) {
+                  fileInputRef.current.setAttribute('capture', 'environment');
+                  fileInputRef.current.click();
+                }
+              } catch (err) {
+                console.warn('Camera permission denied or unavailable:', err);
+                showToast('Camera permission denied or unsupported. Please use Upload Image/PDF option instead.', 'error');
+              }
+            } else {
+              showToast('Camera API not supported in this browser. Please use Upload Image/PDF instead.', 'info');
             }
           }}
         >
           <Camera size={24} />
-          <span>Take Photo or Upload Image/PDF</span>
+          <span>📷 Take Photo</span>
         </button>
 
-        {/* Button 2: Browse Files */}
+        {/* Button 2: Upload File Picker */}
         <button
           type="button"
           className="btn btn-outline"
-          style={{ padding: '18px 24px', fontSize: '16px', width: '100%' }}
+          style={{ padding: '18px 24px', fontSize: '16px', width: '100%', gap: '8px' }}
           onClick={() => {
             if (fileInputRef.current) {
               fileInputRef.current.removeAttribute('capture');
@@ -875,7 +1090,7 @@ export default function AddPrescription() {
           }}
         >
           <Upload size={24} />
-          <span>Browse Document Files</span>
+          <span>📁 Upload Image/PDF</span>
         </button>
       </div>
     </div>

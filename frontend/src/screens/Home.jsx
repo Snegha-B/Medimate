@@ -317,19 +317,21 @@ export default function Home() {
           <button
             onClick={() => handleAction(schedule.id, 'taken')}
             className="btn btn-secondary"
-            style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+            style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '4px', opacity: (isTaken || isSkipped) ? 0.5 : 1, cursor: (isTaken || isSkipped) ? 'not-allowed' : 'pointer' }}
             title="Take Now"
+            disabled={isTaken || isSkipped}
           >
             <CheckCircle size={16} />
-            <span>Take Now</span>
+            <span>{isTaken ? 'Taken' : 'Take Now'}</span>
           </button>
 
           {/* Snooze Button — opens snooze duration picker */}
           <button
             onClick={() => setSnoozeModalSchedule(schedule)}
             className="btn btn-outline"
-            style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', color: 'var(--warning-color)', borderColor: 'var(--warning-color)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+            style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', color: (isTaken || isSkipped) ? 'var(--text-secondary)' : 'var(--warning-color)', borderColor: (isTaken || isSkipped) ? 'var(--border-color)' : 'var(--warning-color)', display: 'inline-flex', alignItems: 'center', gap: '4px', opacity: (isTaken || isSkipped) ? 0.5 : 1, cursor: (isTaken || isSkipped) ? 'not-allowed' : 'pointer' }}
             title="Snooze"
+            disabled={isTaken || isSkipped}
           >
             <Clock size={16} />
             <span>Snooze</span>
@@ -339,11 +341,12 @@ export default function Home() {
           <button
             onClick={() => setSkipModalSchedule(schedule)}
             className="btn btn-outline"
-            style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', color: 'var(--danger-color)', borderColor: 'var(--danger-color)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+            style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', color: (isTaken || isSkipped) ? 'var(--text-secondary)' : 'var(--danger-color)', borderColor: (isTaken || isSkipped) ? 'var(--border-color)' : 'var(--danger-color)', display: 'inline-flex', alignItems: 'center', gap: '4px', opacity: (isTaken || isSkipped) ? 0.5 : 1, cursor: (isTaken || isSkipped) ? 'not-allowed' : 'pointer' }}
             title="Skip Dose"
+            disabled={isTaken || isSkipped}
           >
             <XCircle size={16} />
-            <span>Skip</span>
+            <span>{isSkipped ? 'Skipped' : 'Skip'}</span>
           </button>
         </div>
       </div>

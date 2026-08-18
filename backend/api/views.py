@@ -207,18 +207,20 @@ def dashboard_stats(request):
     })
 
 
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def upload_prescription(request):
     """
-    Smart Document Upload Pipeline (Phase 5 Enhanced):
+    Multi-Stage Document Upload Pipeline:
     Stage 1: Upload & save file
-    Stage 2: OCR extraction + confidence scoring
-    Stage 3: Validate OCR quality
+    Stage 2: Multi-attempt OCR with advanced preprocessing
+    Stage 3: Vision AI fallback if OCR fails (handwriting / low quality)
     Stage 4: Document type classification
     Stage 5: Specialized extraction based on type + AI summary
     """
+    import logging
+    logger = logging.getLogger('medimate.ocr')
+
     uploaded_file = request.FILES.get('image') or request.FILES.get('file') or request.FILES.get('pdf_file')
     if not uploaded_file:
         return Response({'error': 'Unreadable or missing prescription file. Please upload an image or PDF.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -228,7 +230,8 @@ def upload_prescription(request):
         return Response({'error': 'Invalid file format. Please upload a JPEG, PNG, or PDF file.'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # ── Step 2: Upload request received & File saved ──
+        # ── Stage 1: Upload & Save ──
+        logger.info(f"[DOCUMENT] Upload received: {uploaded_file.name} ({uploaded_file.size} bytes)")
         print(f"[PIPELINE LOG] [OK] Step 2: Upload request received ({uploaded_file.name}, {uploaded_file.size} bytes)")
         presc = Prescription(user=request.user)
         if ext == 'pdf':
@@ -238,42 +241,79 @@ def upload_prescription(request):
         presc.save()
         
         file_path = presc.pdf_file.path if presc.pdf_file else (presc.image.path if presc.image else '')
+        logger.info(f"[DOCUMENT] File saved (Prescription ID: {presc.id})")
         print(f"[PIPELINE LOG] [OK] Step 2: File saved to DB (Prescription ID: {presc.id}, Path: {file_path})")
 
-        # ── Step 3: OCR Execution ──
+        # ── Stage 2: Multi-Attempt OCR ──
+        logger.info(f"[OCR] Starting multi-attempt OCR on: {file_path}")
         print(f"[PIPELINE LOG] [OK] Step 3: Tesseract started on file: {file_path}")
         ocr_result = extract_text_from_image(file_path)
 
-        # Handle both old (string) and new (dict) return formats for safety
+        # Handle both old (string) and new (dict) return formats
         if isinstance(ocr_result, dict):
             raw_text = ocr_result.get('text', '')
             ocr_confidence = ocr_result.get('ocr_confidence', 0.0)
+            handwriting_detected = ocr_result.get('handwriting_detected', False)
+            ocr_method = ocr_result.get('method', 'unknown')
         else:
             raw_text = ocr_result or ''
-            ocr_confidence = 75.0  # Fallback
+            ocr_confidence = 75.0
+            handwriting_detected = False
+            ocr_method = 'legacy'
 
         presc.ocr_confidence = ocr_confidence
+        logger.info(f"[OCR] Result: text_length={len(raw_text)}, confidence={ocr_confidence}%, method={ocr_method}, handwriting={handwriting_detected}")
         print(f"[PIPELINE LOG] [OK] Step 3: OCR completed (OCR Confidence: {ocr_confidence}%)")
         print(f"[PIPELINE LOG] [OK] Step 3: OCR extracted text (length: {len(raw_text)} chars)")
 
-        # ── Step 4: Print OCR Text ──
+        # Print OCR text for debugging
         print("[PIPELINE LOG] [OK] Step 4: OCR Extracted Text:\n--------------------\n" + (raw_text or "[No text extracted]") + "\n--------------------")
 
-        # ── Stage 3: Validate OCR Quality ──
-        if not raw_text or len(raw_text.strip()) < 5:
+        # ── Stage 3: Vision AI Fallback ──
+        # If OCR produced insufficient text, try vision-based analysis
+        vision_result = None
+        vision_used = False
+        ocr_insufficient = (not raw_text or len(raw_text.strip()) < 10)
+
+        if ocr_insufficient or handwriting_detected:
+            reason = "handwriting detected" if handwriting_detected else "insufficient OCR text"
+            logger.info(f"[OCR] OCR insufficient ({reason}) — attempting vision fallback")
+            print(f"[PIPELINE LOG] [INFO] OCR insufficient ({reason}). Attempting vision AI fallback...")
+
+            try:
+                from core.services.vision_service import analyze_document_image, vision_result_to_prescription_data
+                vision_result = analyze_document_image(file_path)
+                if vision_result:
+                    vision_used = True
+                    logger.info(f"[AI] Vision fallback: USED (type={vision_result.get('document_type', 'unknown')}, confidence={vision_result.get('overall_confidence', 0)})")
+                    print(f"[PIPELINE LOG] [OK] Vision AI analysis completed: type={vision_result.get('document_type', 'unknown')}")
+                else:
+                    logger.info("[AI] Vision fallback returned no results")
+                    print("[PIPELINE LOG] [WARN] Vision AI returned no results")
+            except Exception as vision_err:
+                logger.exception(f"[AI] Vision fallback error: {vision_err}")
+                print(f"[PIPELINE LOG] [WARN] Vision AI fallback failed: {vision_err}")
+
+        logger.info(f"[OCR] Handwriting/vision fallback: {'USED' if vision_used else 'NOT USED'}")
+
+        # ── Decide: do we have enough to proceed? ──
+        # If both OCR and vision failed, return review_required
+        if ocr_insufficient and not vision_used:
             presc.status = 'review_required'
-            presc.ocr_confidence = 0.0
+            presc.ocr_confidence = ocr_confidence
             presc.document_type = 'unknown'
+            presc.raw_ocr_text = raw_text
             presc.save()
             parsed_data = parse_prescription_text("")
             parsed_data["confidence_score"] = 0.0
-            print("[PIPELINE LOG] Step 4 Warning: Low OCR confidence/length. Returning review required response.")
+            logger.info("[AI] All extraction methods exhausted — review required")
+            print("[PIPELINE LOG] Step 4 Warning: All OCR/vision methods exhausted. Returning review required response.")
             return Response({
                 'prescription_id': presc.id,
-                'raw_text': "",
+                'raw_text': raw_text,
                 'extracted_data': parsed_data,
                 'confidence_score': 0.0,
-                'ocr_confidence': 0.0,
+                'ocr_confidence': ocr_confidence,
                 'document_type': 'unknown',
                 'document_label': 'Document type could not be reliably identified.',
                 'classification_confidence': 0.0,
@@ -281,64 +321,119 @@ def upload_prescription(request):
                 'message': 'Unable to read this document clearly. Please upload a clearer image with the full report visible and good lighting.'
             })
 
-        if ocr_confidence < 40.0:
-            presc.status = 'review_required'
-            presc.raw_ocr_text = raw_text
-            presc.save()
+        # ── Stage 4: Classification & Extraction ──
+        # If vision provided results, use them
+        if vision_used and vision_result:
+            from core.services.vision_service import vision_result_to_prescription_data
+            vision_doc_type = vision_result.get('document_type', 'unknown')
+            vision_confidence = vision_result.get('overall_confidence', 0.0) * 100
 
-        # ── Stage 4: Document Type Classification ──
-        classification = classify_document(raw_text)
-        document_type = classification['document_type']
-        document_label = classification['document_label']
-        classification_confidence = classification['classification_confidence']
+            # Map vision doc types to existing types
+            type_map = {
+                'prescription': 'prescription',
+                'blood_test': 'blood_test',
+                'imaging': 'xray',
+                'discharge_summary': 'discharge_summary',
+                'vaccination': 'vaccination',
+                'other': 'unknown',
+                'unknown': 'unknown',
+            }
+            document_type = type_map.get(vision_doc_type, 'unknown')
+            document_label = {
+                'prescription': 'Doctor Prescription',
+                'blood_test': 'Blood Test Report',
+                'xray': 'Medical Report',
+                'discharge_summary': 'Discharge Summary',
+                'vaccination': 'Vaccination Record',
+                'unknown': 'Medical Document (Vision Analyzed)',
+            }.get(document_type, 'Medical Document')
+            classification_confidence = vision_confidence
 
-        # If classification confidence is too low, treat as unknown
-        if classification_confidence < 30.0:
-            document_type = 'unknown'
-            document_label = 'Document type could not be reliably identified.'
-            print(f"[PIPELINE LOG] Step 4 Warning: Low classification confidence ({classification_confidence}%). Marking as unknown.")
+            logger.info(f"[AI] Document classification (vision): {document_type} ({vision_confidence}%)")
+            print(f"[PIPELINE LOG] [OK] Step 5: Vision classification: {document_type} (confidence: {vision_confidence}%)")
+
+            # Convert vision result to standard format
+            converted = vision_result_to_prescription_data(vision_result)
+            if converted and converted.get('_type') == 'blood_test':
+                # Lab report from vision
+                extracted_data = converted.get('_values', [])
+                ai_summary = generate_ai_summary('blood_test', extracted_data, raw_text or '(vision extracted)')
+            elif converted:
+                extracted_data = converted
+                ai_summary = generate_ai_summary('prescription', extracted_data, raw_text or '(vision extracted)')
+            else:
+                extracted_data = {}
+                ai_summary = 'Document was analyzed using vision AI but structured data could not be fully extracted. Please review manually.'
+
+            # Add review flag if vision confidence is low
+            if vision_result.get('needs_review', False):
+                presc.status = 'review_required'
+
+            classification = {'matched_keywords': [f'vision:{vision_doc_type}']}
+
+        else:
+            # Normal OCR path — classify and extract from text
+            if ocr_confidence < 40.0:
+                presc.status = 'review_required'
+                presc.raw_ocr_text = raw_text
+                presc.save()
+
+            # ── Document Type Classification ──
+            classification = classify_document(raw_text)
+            document_type = classification['document_type']
+            document_label = classification['document_label']
+            classification_confidence = classification['classification_confidence']
+
+            if classification_confidence < 30.0:
+                document_type = 'unknown'
+                document_label = 'Document type could not be reliably identified.'
+                logger.info(f"[AI] Low classification confidence ({classification_confidence}%) — marking unknown")
+                print(f"[PIPELINE LOG] Step 4 Warning: Low classification confidence ({classification_confidence}%). Marking as unknown.")
+
+            logger.info(f"[AI] Document classification: {document_type} ({classification_confidence}%)")
+
+            # ── AI Extraction ──
+            print(f"[PIPELINE LOG] [OK] Step 5: Passing OCR text to AI extractor (Document Type: {document_type})")
+            extracted_data = {}
+            ai_summary = ''
+
+            if document_type == 'prescription':
+                extracted_data = parse_prescription_text(raw_text)
+                ai_summary = generate_ai_summary('prescription', extracted_data, raw_text)
+
+            elif document_type == 'blood_test':
+                extracted_data = parse_lab_report_text(raw_text)
+                ai_summary = generate_ai_summary('blood_test', extracted_data, raw_text)
+
+            elif document_type in ('xray', 'mri', 'ct_scan', 'ultrasound'):
+                extracted_data = parse_imaging_report_text(raw_text)
+                ai_summary = generate_ai_summary(document_type, extracted_data, raw_text)
+
+            elif document_type == 'discharge_summary':
+                extracted_data = parse_discharge_summary_text(raw_text)
+                ai_summary = generate_ai_summary('discharge_summary', extracted_data, raw_text)
+
+            elif document_type == 'vaccination':
+                extracted_data = parse_vaccination_text(raw_text)
+                ai_summary = generate_ai_summary('vaccination', extracted_data, raw_text)
+
+            elif document_type == 'urine_test':
+                extracted_data = parse_blood_report_text(raw_text)
+                ai_summary = generate_ai_summary('urine_test', extracted_data, raw_text)
+
+            elif document_type == 'ecg':
+                extracted_data = parse_imaging_report_text(raw_text)
+                ai_summary = generate_ai_summary('ecg', extracted_data, raw_text)
+
+            else:
+                extracted_data = {}
+                ai_summary = 'Document type could not be reliably identified. Please try a different image or verify the document type.'
 
         presc.document_type = document_type
         presc.classification_confidence = classification_confidence
 
-        # ── Step 5: AI Extraction ──
-        print(f"[PIPELINE LOG] [OK] Step 5: Passing OCR text to AI extractor (Document Type: {document_type})")
-        extracted_data = {}
-        ai_summary = ''
-
-        if document_type == 'prescription':
-            extracted_data = parse_prescription_text(raw_text)
-            ai_summary = generate_ai_summary('prescription', extracted_data, raw_text)
-
-        elif document_type == 'blood_test':
-            extracted_data = parse_lab_report_text(raw_text)
-            ai_summary = generate_ai_summary('blood_test', extracted_data, raw_text)
-
-        elif document_type in ('xray', 'mri', 'ct_scan', 'ultrasound'):
-            extracted_data = parse_imaging_report_text(raw_text)
-            ai_summary = generate_ai_summary(document_type, extracted_data, raw_text)
-
-        elif document_type == 'discharge_summary':
-            extracted_data = parse_discharge_summary_text(raw_text)
-            ai_summary = generate_ai_summary('discharge_summary', extracted_data, raw_text)
-
-        elif document_type == 'vaccination':
-            extracted_data = parse_vaccination_text(raw_text)
-            ai_summary = generate_ai_summary('vaccination', extracted_data, raw_text)
-
-        elif document_type == 'urine_test':
-            extracted_data = parse_blood_report_text(raw_text)
-            ai_summary = generate_ai_summary('urine_test', extracted_data, raw_text)
-
-        elif document_type == 'ecg':
-            extracted_data = parse_imaging_report_text(raw_text)
-            ai_summary = generate_ai_summary('ecg', extracted_data, raw_text)
-
-        else:
-            # Unknown type — do NOT default to parse_prescription_text
-            extracted_data = {}
-            ai_summary = 'Document type could not be reliably identified. Please try a different image or verify the document type.'
-
+        logger.info(f"[AI] Medical extraction completed: YES")
+        logger.info(f"[AI] Review required: {presc.status == 'review_required'}")
         print(f"[PIPELINE LOG] [OK] Step 5: Extracted Medicines/Data:\n  {extracted_data}")
 
         # Store results on the Prescription model
@@ -368,6 +463,7 @@ def upload_prescription(request):
             'ocr_confidence': ocr_confidence,
             'ai_summary': ai_summary,
             'matched_keywords': classification.get('matched_keywords', []),
+            'vision_used': vision_used,
         })
     except Exception as e:
         import logging

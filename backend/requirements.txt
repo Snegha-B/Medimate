@@ -13,3 +13,7 @@ pytesseract==0.3.13
 rapidfuzz==3.14.1
 pytz==2026.3.post1
 pymupdf==1.28.2
+google-genai>=1.0.0
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0

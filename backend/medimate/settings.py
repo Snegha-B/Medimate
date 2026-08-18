@@ -177,6 +177,9 @@ REMINDER_RETRY_INTERVAL_MINUTES = int(os.environ.get('REMINDER_RETRY_INTERVAL_MI
 REMINDER_MAX_RETRIES = int(os.environ.get('REMINDER_MAX_RETRIES', '2'))
 REMINDER_CHECK_INTERVAL_SECONDS = int(os.environ.get('REMINDER_CHECK_INTERVAL_SECONDS', '60'))
 
+# ─── Google Gemini Vision API (handwriting & low-quality document analysis) ───
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+
 # ─── Logging ───
 LOGGING = {
     'version': 1,
@@ -209,9 +212,20 @@ LOGGING = {
             'level': 'INFO',
             'propagate': False,
         },
+        'medimate.ocr': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'medimate.vision': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
 
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
 
