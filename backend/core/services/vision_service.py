@@ -1,17 +1,20 @@
 """
-Vision-based Document Analysis Service for MediMate.
+Vision-based Document Analysis Service for MediMate (Memory-Safe Edition).
 
 Uses Google Gemini's vision capabilities to analyze medical documents
 when OCR fails or handwriting is detected.
 
 Key principles:
+- Memory-safe payload (JPEG 75% quality, max 1400px)
 - Conservative extraction: never guess ambiguous handwriting
-- Mark uncertain fields with needs_review=True
-- Comprehensive diagnostic logging
+- Comprehensive diagnostic & resource logging
+- Immediate memory release & garbage collection
 """
 
 import logging
 import os
+import io
+import gc
 
 logger = logging.getLogger('medimate.vision')
 
@@ -130,16 +133,33 @@ If you cannot read the document at all, return:
 """
 
 
+def _compress_image_for_vision(pil_img, max_dim=1400):
+    """Resize image to max 1400px and compress to low-footprint JPEG byte buffer."""
+    if pil_img.mode in ('RGBA', 'P', 'LA'):
+        pil_img = pil_img.convert('RGB')
+
+    w, h = pil_img.size
+    if w > max_dim or h > max_dim:
+        if w >= h:
+            new_w = max_dim
+            new_h = int(h * (max_dim / w))
+        else:
+            new_h = max_dim
+            new_w = int(w * (max_dim / h))
+        pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+
+    buf = io.BytesIO()
+    pil_img.save(buf, format='JPEG', quality=75, optimize=True)
+    byte_data = buf.getvalue()
+    buf.close()
+    return byte_data, pil_img.size
+
+
 def analyze_document_image(image_path):
     """
-    Analyze a medical document image using Google Gemini vision.
-
-    Args:
-        image_path: Absolute path to the image file
-
-    Returns:
-        dict with vision analysis results, or None if unavailable/failed.
+    Analyze a medical document image using Google Gemini vision in a memory-safe manner.
     """
+    _log("[RESOURCE] Vision fallback: YES")
     _log("[VISION] Vision request started")
     _log("[VISION] Provider/model: google-genai / gemini-2.0-flash")
 
@@ -160,50 +180,47 @@ def analyze_document_image(image_path):
         import json
         from PIL import Image
 
-        _log("[VISION] Image attached: YES")
         ext = os.path.splitext(image_path)[1].lower()
-
-        # Handle PDF vs Image
         image_bytes = None
-        mime_type = 'image/jpeg'
-        dimensions = "unknown"
+        dimensions = (0, 0)
 
         if ext == '.pdf':
             import pymupdf
             doc = pymupdf.open(image_path)
             page = doc[0]
-            pix = page.get_pixmap(dpi=300)
-            image_bytes = pix.tobytes("png")
-            mime_type = 'image/png'
-            dimensions = f"{pix.width}x{pix.height}"
-            _log("[VISION] PDF converted to high-res PNG for vision analysis")
+            pix = page.get_pixmap(dpi=180)
+            pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            doc.close()
+            del pix
+            
+            image_bytes, dimensions = _compress_image_for_vision(pil_img, max_dim=1400)
+            pil_img.close()
+            del pil_img
+            _log("[VISION] Converted PDF page 1 to memory-compressed JPEG for vision analysis")
         else:
-            with open(image_path, 'rb') as f:
-                image_bytes = f.read()
-            mime_map = {
-                '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                '.png': 'image/png', '.bmp': 'image/bmp',
-                '.webp': 'image/webp',
-            }
-            mime_type = mime_map.get(ext, 'image/jpeg')
-            try:
-                pil_img = Image.open(image_path)
-                dimensions = f"{pil_img.size[0]}x{pil_img.size[1]}"
-            except Exception:
-                pass
+            pil_img = Image.open(image_path)
+            image_bytes, dimensions = _compress_image_for_vision(pil_img, max_dim=1400)
+            pil_img.close()
+            del pil_img
 
-        _log(f"[VISION] Image format: {mime_type}")
-        _log(f"[VISION] Image dimensions: {dimensions}")
-        _log(f"[VISION] Image bytes/size: {len(image_bytes)} bytes")
+        _log("[VISION] Image attached: YES")
+        _log(f"[VISION] Image format: image/jpeg")
+        _log(f"[VISION] Image dimensions: {dimensions[0]}x{dimensions[1]}")
+        _log(f"[RESOURCE] Vision image size: {round(len(image_bytes)/1024, 1)} KB")
 
         # Call Gemini Vision API
         response = client.models.generate_content(
             model='gemini-2.0-flash',
             contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'),
                 MEDICAL_DOCUMENT_PROMPT,
             ],
         )
+
+        # Release image bytes buffer immediately
+        del image_bytes
+        _log("[RESOURCE] Vision image released")
+        gc.collect()
 
         _log("[VISION] Response received: YES")
         response_text = response.text.strip() if response.text else ''
