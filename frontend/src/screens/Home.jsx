@@ -55,6 +55,18 @@ export default function Home() {
   useEffect(() => {
     requestNotificationPermission();
     fetchSchedule();
+
+    if ('serviceWorker' in navigator) {
+      const handleSwMessage = (event) => {
+        if (event.data && event.data.type === 'NOTIFICATION_ACTION') {
+          fetchSchedule();
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      };
+    }
   }, []);
 
   // Schedule background reminders whenever schedules change

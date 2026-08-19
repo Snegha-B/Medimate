@@ -101,9 +101,10 @@ class Command(BaseCommand):
             # Web Push
             if prefs.push_enabled:
                 subscriptions = PushSubscription.objects.filter(user=user)
+                food_instruction = 'Before Food' if reminder.schedule and reminder.schedule.timing_instruction == 'before_food' else 'With Food' if reminder.schedule and reminder.schedule.timing_instruction == 'with_food' else 'After Food'
                 payload = {
-                    'title': '💊 MediMate Medicine Reminder',
-                    'body': f"It's time to take {reminder.medicine_name} — {reminder.dosage or '1 tablet'}.",
+                    'title': 'MediMate – Medicine Reminder',
+                    'body': f"Time to take {reminder.medicine_name} — {reminder.dosage or '1 tablet'}, {food_instruction}.",
                     'icon': '/icons/icon-192.png',
                     'data': {
                         'url': '/',

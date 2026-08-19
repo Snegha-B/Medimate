@@ -55,11 +55,14 @@ export async function showReminderNotification(schedule, options = {}) {
   const dosage = schedule.dosage || '1 tablet';
   const timeStr = formatScheduleTime(schedule.scheduled_time || schedule.reminder_time);
   const foodInstruction = schedule.timing_instruction === 'before_food'
-    ? 'Before Food' : 'After Food';
+    ? 'Before Food'
+    : schedule.timing_instruction === 'with_food'
+    ? 'With Food'
+    : 'After Food';
 
-  const title = `💊 Time to take your medicine`;
+  const title = 'MediMate – Medicine Reminder';
   const notifOptions = {
-    body: `Medicine: ${name} ${dosage}\nTime: ${timeStr}\nInstruction: ${foodInstruction}`,
+    body: `Time to take ${name} — ${dosage}, ${foodInstruction}.`,
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
     tag: `medimate-reminder-${schedule.id}`,
@@ -76,7 +79,7 @@ export async function showReminderNotification(schedule, options = {}) {
   // Try Service Worker registration first for reliable system OS notification display
   if ('serviceWorker' in navigator) {
     try {
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await navigator.serviceWorker.getRegistration();
       if (reg && reg.showNotification) {
         await reg.showNotification(title, notifOptions);
         return;
@@ -175,9 +178,10 @@ function fireReminder(schedule, callbacks, voiceSettings) {
   // Mark as notified IMMEDIATELY
   notifiedDoseIds.add(schedule.id);
 
-  // Show OS notification exactly ONCE is now handled by backend Web Push.
-  // Frontend timers are kept purely for voice auto-play and in-app updates.
-  // showReminderNotification(schedule, callbacks);
+  // Show OS readable notification
+  if ('Notification' in window && Notification.permission === 'granted') {
+    showReminderNotification(schedule, callbacks);
+  }
 
   // Play voice if volume is enabled
   if (voiceSettings.enabled) {

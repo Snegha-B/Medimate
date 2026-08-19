@@ -19,8 +19,8 @@ export default function PwaPrompt() {
   const [pushStatus, setPushStatus] = useState('default'); // 'default', 'subscribed', 'denied'
 
   useEffect(() => {
-    // 1. Register Service Worker (only in production build or when enabled)
-    if ('serviceWorker' in navigator && import.meta.env.PROD) {
+    // 1. Register Service Worker
+    if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js')
         .then((reg) => console.log('[SW] Registered successfully:', reg))
         .catch((err) => console.error('[SW] Registration failed:', err));
