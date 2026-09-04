@@ -41,31 +41,17 @@ MediMate addresses these challenges by providing an intelligent healthcare platf
 
 # 📸 Application Preview
 
-## 🏠 Healthcare Dashboard
+| Healthcare Dashboard | Daily Medication Schedule |
+|----------------------|---------------------------|
+| ![](screenshots/dashboard.png) | ![](screenshots/schedule.png) |
 
-![Dashboard](screenshots/dashboard.png)
+| AI Prescription Analysis | Add Prescription |
+|--------------------------|------------------|
+| ![](screenshots/ocr-analysis.png) | ![](screenshots/add-prescription.png) |
 
-## ⏰ Daily Medication Schedule
-
-![Schedule](screenshots/schedule.png)
-
-## 🤖 AI Prescription Analysis (OCR)
-
-![OCR Analysis](screenshots/ocr-analysis.png)
-
-## 💊 Add Prescription
-
-![Add Prescription](screenshots/add-prescription.png)
-
-## 🧪 AI Lab Report Analysis
-
-![Lab Report](screenshots/lab-report.png)
-
-## 📋 My Medications
-
-![Medications](screenshots/medications.png)
-
----
+| AI Lab Report Analysis | My Medications |
+|------------------------|----------------|
+| ![](screenshots/lab-report.png) | ![](screenshots/medications.png) |
 
 
 ## 💊 Medication Management
