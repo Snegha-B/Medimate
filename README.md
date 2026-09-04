@@ -1,10 +1,12 @@
 # 🏥 MediMate
 
-> An AI-Powered Smart Healthcare Management System
+ ### AI-Powered Medication Management & Health Analytics Platform
 
-MediMate is a full-stack healthcare management system developed to simplify patient healthcare through AI-powered prescription analysis, medication management, lab report interpretation, reminders, and health record management.
+A full-stack healthcare platform that helps patients manage medications, analyze prescriptions and lab reports using AI, track health records, and receive intelligent medication reminders.
 
-The system combines Artificial Intelligence, OCR technology, and modern web development to provide an intelligent healthcare assistant for patients.
+🔗 **Live Demo:** https://medimate-frontend-09uz.onrender.com
+
+💻 **Tech Stack:** React • Django • Django REST API • SQLite • OCR • AI
 
 ---
 
@@ -204,3 +206,8 @@ Passionate about Software Development, Artificial Intelligence and Healthcare Te
 # 📜 License
 
 This project is developed for educational and academic purposes.
+
+![React](https://img.shields.io/badge/React-20232A?logo=react)
+![Django](https://img.shields.io/badge/Django-092E20?logo=django)
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python)
+![License](https://img.shields.io/badge/License-Educational-blue)
